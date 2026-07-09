@@ -1,0 +1,25 @@
+{
+  "name": "mtplx-dashboard",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Node/TypeScript server fronting the MTPLX metrics dashboard and live log, polling MTPLX server-side and pushing updates via SSE.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "tsx watch server/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.5.0",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.4"
+  }
+}

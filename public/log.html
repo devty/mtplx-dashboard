@@ -207,29 +207,23 @@ footer code { font: 11px ui-monospace, Menlo, monospace; }
     <span style="font-family:ui-monospace,Menlo,monospace">openai</span>, so caller attribution is approximate.
   </div>
 
-  <div id="banner"><b>Connection lost.</b> Unable to reach <span id="host-banner" style="font-variant-numeric:tabular-nums">127.0.0.1:8000</span> — showing the last requests seen at <span id="banner-time">—</span>. Retrying every second…</div>
+  <div id="banner"><b>Connection lost.</b> The dashboard server can't reach MTPLX — showing the last requests seen at <span id="banner-time">—</span>. Retrying automatically…</div>
 
   <div id="feed"><div class="empty-state" id="empty">Waiting for the first completed request…</div></div>
 
-  <footer>polling <code><span id="host-footer">127.0.0.1:8000</span>/metrics</code> every 1 s · newest first · rolling buffer of <span id="f-ring">300</span> requests · <a href="index.html" style="color:var(--muted)">back to dashboard</a></footer>
+  <footer>server-side poll of MTPLX <code>/metrics</code> · pushed live over SSE · newest first · rolling buffer of <span id="f-ring">—</span> requests · <a href="index.html" style="color:var(--muted)">back to dashboard</a></footer>
 </div>
 
 <script>
 'use strict';
-// Endpoint is overridable via ?server=host:port (or ?server=http://host:port);
-// defaults to the standard local MTPLX server. The target must allow this origin via CORS.
-const API = (() => {
-  const q = new URLSearchParams(location.search).get('server');
-  const s = (q || '127.0.0.1:8000').trim().replace(/\/+$/, '');
-  return /^https?:\/\//i.test(s) ? s : 'http://' + s;
-})();
-const API_HOST = API.replace(/^https?:\/\//i, '');
-document.querySelectorAll('#host-banner, #host-footer').forEach(el => { el.textContent = API_HOST; });
-const POLL = 1000;
-const BUFFER = 300;
+// Data arrives over SSE from this same-origin Node server, which owns
+// polling MTPLX and deduping/trimming the log buffer server-side (see
+// server/metricsPoller.ts) — no more ?server= override or per-tab polling.
 const ACTIVE_WINDOW = 5000;
 
-/* ordered newest-first; map for dedup + arrival stamp */
+/* Local mirror of "what's already rendered" — dedup/trim is the server's
+   job now (see ingest() below); seen/order here only track DOM state so
+   render() can insert just the new rows and open detail-drawers survive. */
 const seen = new Map();      // request_id -> { firstSeen, data }
 const order = [];            // request_ids, newest first
 let connected = false, lastOkAt = null, lastArrivalAt = null;
@@ -377,27 +371,36 @@ function buildDetail(m, id, firstSeen) {
   return `<div class="detail-inner">${core}${depth}${rolesHtml}${toolsHtml}</div>`;
 }
 
-/* ingest a metrics payload: register any unseen request_ids (oldest→newest) */
-function ingest(recent) {
-  let added = 0;
-  const now = Date.now();
-  (recent || []).forEach(m => {
-    const id = m.request_id;
-    if (!id) return;
-    if (seen.has(id)) { seen.get(id).data = m; return; }  // refresh fields
-    seen.set(id, { firstSeen: now, data: m });
-    order.unshift(id);                                     // newest to front
-    added++;
-    lastArrivalAt = now;
+/* Consume the server's already-deduped, already-trimmed { order, entries }
+   log payload (see server/metricsPoller.ts ingestLog()). firstSeen comes
+   from the server — stamped once, globally, the moment a request_id was
+   first observed — not from this tab's own Date.now(), so a fresh reload
+   shows historically-accurate arrival times instead of everything reading
+   "just now". */
+function ingest(logPayload) {
+  const srvOrder = (logPayload && logPayload.order) || [];
+  const entries = (logPayload && logPayload.entries) || {};
+
+  srvOrder.forEach(id => {
+    const e = entries[id];
+    if (!e) return;
+    const existing = seen.get(id);
+    if (existing) { existing.data = e.data; return; }        // refresh fields
+    seen.set(id, { firstSeen: e.firstSeen, data: e.data });
+    if (!lastArrivalAt || e.firstSeen > lastArrivalAt) lastArrivalAt = e.firstSeen;
   });
-  /* trim buffer */
-  while (order.length > BUFFER) {
-    const drop = order.pop();
-    seen.delete(drop);
-    const node = $('feed').querySelector(`.row[data-id="${CSS.escape(drop)}"]`);
+
+  order.length = 0;
+  order.push(...srvOrder);
+
+  /* drop DOM/state for anything the server has already trimmed */
+  const keep = new Set(srvOrder);
+  [...seen.keys()].forEach(id => {
+    if (keep.has(id)) return;
+    seen.delete(id);
+    const node = $('feed').querySelector(`.row[data-id="${CSS.escape(id)}"]`);
     if (node) node.remove();
-  }
-  return added;
+  });
 }
 
 function render() {
@@ -433,35 +436,35 @@ function renderStatus() {
   else { dot.className = 'dot'; txt.textContent = 'idle'; }
 }
 
-function fetchTimeout(url, ms) {
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), ms);
-  return fetch(url, { signal: ctl.signal, cache: 'no-store' }).finally(() => clearTimeout(t));
-}
+/* ================================================================= live data (SSE) */
+function applyPayload(p) {
+  connected = p.connected;
+  lastOkAt = p.lastOkAt;
+  $('f-ring').textContent = String(p.logBufferSize);
 
-async function poll() {
-  try {
-    const res = await fetchTimeout(API + '/metrics', 2500);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    ingest(data.recent);
-    render();
-    lastOkAt = Date.now();
-    if (!connected) { connected = true; document.body.classList.remove('disconnected'); }
-  } catch (err) {
-    if (connected || lastOkAt === null) {
-      connected = false;
-      document.body.classList.add('disconnected');
-      $('banner-time').textContent = lastOkAt ? clock(new Date(lastOkAt)) : '(no data yet)';
-    }
-    if (lastOkAt === null) document.body.classList.add('disconnected');
+  if (p.log) { ingest(p.log); render(); }
+
+  if (!connected) {
+    document.body.classList.add('disconnected');
+    $('banner-time').textContent = lastOkAt ? clock(new Date(lastOkAt)) : '(no data yet)';
+  } else {
+    document.body.classList.remove('disconnected');
   }
+
   renderStatus();
 }
 
-$('f-ring').textContent = String(BUFFER);
-poll();
-setInterval(poll, POLL);
+const es = new EventSource('/api/events');
+es.addEventListener('snapshot', e => applyPayload(JSON.parse(e.data)));
+es.addEventListener('tick',     e => applyPayload(JSON.parse(e.data)));
+es.onerror = () => {
+  connected = false;
+  document.body.classList.add('disconnected');
+  renderStatus();
+  /* no custom reconnect logic — EventSource retries natively, and the fresh
+     'snapshot' it gets on reconnect clears 'disconnected' via applyPayload() */
+};
+
 setInterval(() => { tickAges(); renderStatus(); }, 1000);
 </script>
 </body>

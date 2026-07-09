@@ -1,8 +1,10 @@
 # MTPLX Dashboard
 
-A beautiful, **zero-dependency** realtime dashboard and live activity log for a local
-[MTPLX](https://mtplx.com) inference server. Two self-contained HTML files, no build
-step, no npm, no CDNs — just point a static file server at the folder and open it.
+A beautiful realtime dashboard and live activity log for a local
+[MTPLX](https://mtplx.com) inference server. A small Node/TypeScript server polls MTPLX's
+`/metrics` endpoint itself and pushes updates to the browser over Server-Sent Events — the two
+pages (`public/index.html`, `public/log.html`) stay plain HTML/CSS/JS, no client framework, no
+build step for the frontend.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
@@ -48,53 +50,67 @@ The two pages cross-link via a header nav.
 ## Quick start
 
 You need a running MTPLX server with its OpenAI-compatible endpoint (and `/metrics`) on
-`http://127.0.0.1:8000` — the default.
+`http://127.0.0.1:8000` — the default target this server polls.
 
 ```bash
 git clone https://github.com/devty/mtplx-dashboard.git
 cd mtplx-dashboard
-python3 -m http.server 8123
+npm install
+npm run dev
 # then open:
 #   http://127.0.0.1:8123/          → dashboard
 #   http://127.0.0.1:8123/log.html  → live log
 ```
 
-Serve it over **http** (not `file://`) so the browser sends an `Origin` header — the MTPLX
-server reflects it in its CORS response, which is exactly why no proxy is needed.
+`npm run dev` runs the TypeScript server directly (via `tsx watch`, auto-restarting on change) —
+no separate compile step needed for day-to-day development. For production, build once and run
+the compiled output:
 
-### Pointing at a different host/port
-
-The quickest way — no editing — is the **`?server=` query parameter**, honored by both pages:
-
-```
-http://127.0.0.1:8123/?server=192.168.1.50:8000          # host:port  → http://host:port
-http://127.0.0.1:8123/log.html?server=https://box.local  # or a full scheme+host
+```bash
+npm run build
+npm start
 ```
 
-The connection banner and footer update to show the target you pointed at. To change the
-**default** instead, each file has a single constant near the top of its `<script>`:
+### Configuration
 
-```js
-const API = (() => { ... })();   // defaults to 127.0.0.1:8000, overridden by ?server=
+The server polls a single, configured MTPLX target — set these as environment variables
+(`.env.example` documents the same list; this project has no `dotenv` dependency, so either
+`export` them in your shell, pass them inline, or use Node's native `--env-file=.env` flag):
+
+| Variable            | Default                  | Meaning                                            |
+|---------------------|---------------------------|-----------------------------------------------------|
+| `MTPLX_URL`         | `http://127.0.0.1:8000`   | MTPLX server this process polls                     |
+| `PORT`              | `8123`                    | Port this dashboard server listens on               |
+| `POLL_INTERVAL_MS`  | `1000`                    | How often to poll MTPLX's `/metrics`                |
+| `MTPLX_TIMEOUT_MS`  | `2500`                    | Timeout per poll request                            |
+| `RING_SIZE`         | `120`                     | Sparkline history depth (dashboard)                 |
+| `LOG_BUFFER_SIZE`   | `300`                     | Live-log rolling buffer depth                        |
+| `MAX_BACKOFF_MS`    | `10000`                   | Ceiling for poll-retry backoff when MTPLX is down    |
+
+```bash
+MTPLX_URL=http://box.local:8000 npm run dev
 ```
-
-Either way, the target server must allow the dashboard's origin via CORS (MTPLX reflects the
-request `Origin`, so this works out of the box).
 
 ---
 
 ## How it works
 
-- Polls `GET {API}/metrics` once per second. The response is
-  `{ latest, recent[32], tool_parse_counters }` — `latest` is the most recent request,
-  `recent` is a rolling 32-deep history of completed requests, each a full per-request record.
-- Sparklines are hand-drawn inline SVG; the client keeps its own ring buffer (the dashboard
-  seeds it from `recent` on load) so history is immediate and honest per-request, not a flat
-  1 Hz line.
-- The live log dedups by `request_id`, stamps an arrival time on first sight (the records carry
-  no wall-clock), and keeps a 300-row rolling buffer.
-- Both pages are light/dark aware (`prefers-color-scheme`) and degrade gracefully when the
-  server is unreachable (dim + reconnect banner, last values retained).
+- A Node/TypeScript server (`server/`) polls `GET {MTPLX_URL}/metrics` on an interval, server-side
+  — not the browser. The response is `{ latest, recent[32], tool_parse_counters }` — `latest` is
+  the most recent request, `recent` is MTPLX's own rolling 32-deep history.
+- The server keeps its own deeper in-memory history (sparkline ring buffers sized `RING_SIZE`,
+  a live-log buffer sized `LOG_BUFFER_SIZE`, deduped by `request_id`) and retries with exponential
+  backoff (capped at `MAX_BACKOFF_MS`) when MTPLX is unreachable.
+- Browsers connect once via `EventSource` to `/api/events`: an initial `snapshot` event delivers
+  full history immediately (a reload or a brand-new tab never starts from empty), and a `tick`
+  event pushes out on every genuine change thereafter — no client-side polling.
+- Sparklines are still hand-drawn inline SVG on the client; only *where the history comes from*
+  changed (the server, not a per-tab ring buffer).
+- Because polling happens server-to-server, MTPLX's CORS reflection is no longer relevant — the
+  browser only ever talks same-origin to this Node server.
+- Both pages are light/dark aware (`prefers-color-scheme`) and degrade gracefully when MTPLX is
+  unreachable (dim + reconnect banner, last values retained) or when the SSE connection itself
+  drops (native `EventSource` auto-reconnect, no custom retry logic needed).
 
 ## Limitations (by design — it reads `/metrics`, nothing more)
 

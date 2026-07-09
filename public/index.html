@@ -265,7 +265,7 @@ footer code { font: 11px ui-monospace, Menlo, monospace; }
     </div>
   </header>
 
-  <div id="banner"><b>Connection lost.</b> Unable to reach <span id="host-banner" style="font-variant-numeric:tabular-nums">127.0.0.1:8000</span> — showing last data from <span id="banner-time">—</span>. Retrying every second…</div>
+  <div id="banner"><b>Connection lost.</b> The dashboard server can't reach MTPLX — showing last data from <span id="banner-time">—</span>. Retrying automatically…</div>
 
   <main>
 
@@ -378,32 +378,23 @@ footer code { font: 11px ui-monospace, Menlo, monospace; }
 
   </main>
 
-  <footer>polling <code><span id="host-footer">127.0.0.1:8000</span>/metrics</code> every 1 s · history persists client-side (last <span id="f-ring">120</span> requests)</footer>
+  <footer>server-side poll of MTPLX <code>/metrics</code> · pushed live over SSE · history persists server-side (last <span id="f-ring">—</span> requests)</footer>
 </div>
 
 <script>
 'use strict';
-/* ================================================================= config */
-// Endpoint is overridable via ?server=host:port (or ?server=http://host:port);
-// defaults to the standard local MTPLX server. The target must allow this origin via CORS.
-const API   = (() => {
-  const q = new URLSearchParams(location.search).get('server');
-  const s = (q || '127.0.0.1:8000').trim().replace(/\/+$/, '');
-  return /^https?:\/\//i.test(s) ? s : 'http://' + s;
-})();
-const API_HOST = API.replace(/^https?:\/\//i, '');
-document.querySelectorAll('#host-banner, #host-footer').forEach(el => { el.textContent = API_HOST; });
-const POLL  = 1000;
-const RING  = 120;          // client-side ring buffer of completed requests
+/* ================================================================= config
+   Data now arrives over SSE from this same-origin Node server, which owns
+   polling MTPLX server-side (see server/metricsPoller.ts) — no more ?server=
+   override or per-tab polling here. */
 const CTX_MAX = 262144;
 const ACTIVE_WINDOW = 5000; // ms after a change we call the server "active"
 
-/* ================================================================= state */
-const rings = { decode: [], prefill: [], ttft: [], accept: [] };
-let lastSig = null;
-let lastChangeAt = null;    // wall-clock ms of last observed new request
-let lastOkAt = null;        // last successful poll
-let seeded = false;
+/* ================================================================= state
+   Populated from each SSE 'snapshot'/'tick' payload — see applyPayload(). */
+let rings = { decode: [], prefill: [], ttft: [], accept: [] };
+let lastChangeAt = null;
+let lastOkAt = null;
 let connected = false;
 
 /* ================================================================= utils */
@@ -438,31 +429,6 @@ function fmtAgo(ms) {
 }
 const clock = d => d.toLocaleTimeString('en-US', { hour12: false });
 const sum = a => (a || []).reduce((x, y) => x + (y || 0), 0);
-
-function sig(m) {
-  if (!m) return null;
-  return [m.session_id, m.request_elapsed_s, m.prompt_tokens, m.completion_tokens, m.ttft_s].join('|');
-}
-function push(ring, v) {
-  ring.push(v);
-  if (ring.length > RING) ring.shift();
-}
-function sample(m) {
-  const drafted = sum(m.drafted_by_depth);
-  return {
-    decode:  m.display_decode_tok_s ?? m.decode_tok_s ?? null,
-    prefill: m.prefill_tok_s ?? m.prompt_tps ?? null,
-    ttft:    m.ttft_s ?? null,
-    accept:  drafted > 0 ? sum(m.accepted_by_depth) / drafted : null,
-  };
-}
-function pushSample(m) {
-  const s = sample(m);
-  push(rings.decode, s.decode);
-  push(rings.prefill, s.prefill);
-  push(rings.ttft, s.ttft);
-  push(rings.accept, s.accept);
-}
 
 /* ================================================================= sparkline
    Hand-rolled SVG sparkline: 2px line, 10% area wash, 8px end-dot with a
@@ -735,67 +701,43 @@ function renderStatus() {
   $('updated').textContent = lastOkAt ? clock(new Date(lastOkAt)) : '—';
 }
 
-/* ================================================================= polling */
-function fetchTimeout(url, ms) {
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), ms);
-  return fetch(url, { signal: ctl.signal, cache: 'no-store' }).finally(() => clearTimeout(t));
-}
+/* ================================================================= live data (SSE)
+   The server pushes one 'snapshot' on connect (full history) and a 'tick'
+   on every genuine change thereafter (mirrors the old client sig()-gated
+   re-render, now decided server-side). applyPayload() is the single place
+   that turns a payload into the same renderAll()/renderStatus() calls the
+   old poll() used to make. */
+function applyPayload(p) {
+  connected = p.connected;
+  lastOkAt = p.lastOkAt;
+  lastChangeAt = p.lastChangeAt;
+  rings = p.rings;
+  if (p.model) $('model-chip').textContent = p.model;
+  $('f-ring').textContent = String(p.ringSize);
 
-async function poll() {
-  try {
-    const res = await fetchTimeout(API + '/metrics', 2500);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    const m = data.latest;
-    const newSig = sig(m);
-
-    if (!seeded) {
-      /* seed sparkline history from the server's rolling window (oldest→newest) */
-      (data.recent || []).forEach(r => pushSample(r));
-      const rec = data.recent || [];
-      if (m && (!rec.length || sig(rec[rec.length - 1]) !== newSig)) pushSample(m);
-      seeded = true;
-      lastSig = newSig;
-      renderAll(data);
-    } else if (newSig !== lastSig) {
-      if (m) pushSample(m);
-      lastSig = newSig;
-      lastChangeAt = Date.now();
-      renderAll(data);
-    }
-
-    lastOkAt = Date.now();
-    if (!connected) {
-      connected = true;
-      document.body.classList.remove('disconnected');
-      renderAll(data); /* re-render un-dimmed with fresh data after an outage */
-    }
-  } catch (err) {
-    if (connected || lastOkAt === null) {
-      connected = false;
-      document.body.classList.add('disconnected');
-      $('banner-time').textContent = lastOkAt ? clock(new Date(lastOkAt)) : '(no data received yet)';
-    }
+  if (!connected) {
+    document.body.classList.add('disconnected');
+    $('banner-time').textContent = lastOkAt ? clock(new Date(lastOkAt)) : '(no data received yet)';
+  } else {
+    document.body.classList.remove('disconnected');
   }
+
+  renderAll({ latest: p.latest || {}, tool_parse_counters: p.toolParseCounters });
   renderStatus();
 }
 
-async function fetchModel() {
-  try {
-    const res = await fetchTimeout(API + '/v1/models', 2500);
-    const j = await res.json();
-    const id = j?.data?.[0]?.id;
-    if (id) { $('model-chip').textContent = id; return; }
-  } catch (e) { /* retry below */ }
-  setTimeout(fetchModel, 5000);
-}
+const es = new EventSource('/api/events');
+es.addEventListener('snapshot', e => applyPayload(JSON.parse(e.data)));
+es.addEventListener('tick',     e => applyPayload(JSON.parse(e.data)));
+es.onerror = () => {
+  connected = false;
+  document.body.classList.add('disconnected');
+  renderStatus();
+  /* no custom reconnect logic — EventSource retries natively, and the fresh
+     'snapshot' it gets on reconnect clears 'disconnected' via applyPayload() */
+};
 
-$('f-ring').textContent = String(RING);
-fetchModel();
-poll();
-setInterval(poll, POLL);
-setInterval(renderStatus, 1000);
+setInterval(renderStatus, 1000); // keeps the "active"/"idle" wall-clock label ticking between ticks
 
 /* re-render sparklines on resize (they are sized to the container) */
 let rz;

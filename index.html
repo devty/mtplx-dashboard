@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230b0e14'/%3E%3Cpath d='M55 10 28 56h18l-5 34 31-48H52z' fill='%233b82f6'/%3E%3C/svg%3E">
 <title>MTPLX — inference metrics</title>
 <style>
 /* ---------------------------------------------------------------- tokens */
@@ -264,7 +265,7 @@ footer code { font: 11px ui-monospace, Menlo, monospace; }
     </div>
   </header>
 
-  <div id="banner"><b>Connection lost.</b> Unable to reach <span style="font-variant-numeric:tabular-nums">127.0.0.1:8000</span> — showing last data from <span id="banner-time">—</span>. Retrying every second…</div>
+  <div id="banner"><b>Connection lost.</b> Unable to reach <span id="host-banner" style="font-variant-numeric:tabular-nums">127.0.0.1:8000</span> — showing last data from <span id="banner-time">—</span>. Retrying every second…</div>
 
   <main>
 
@@ -377,13 +378,21 @@ footer code { font: 11px ui-monospace, Menlo, monospace; }
 
   </main>
 
-  <footer>polling <code>127.0.0.1:8000/metrics</code> every 1 s · history persists client-side (last <span id="f-ring">120</span> requests)</footer>
+  <footer>polling <code><span id="host-footer">127.0.0.1:8000</span>/metrics</code> every 1 s · history persists client-side (last <span id="f-ring">120</span> requests)</footer>
 </div>
 
 <script>
 'use strict';
 /* ================================================================= config */
-const API   = 'http://127.0.0.1:8000';
+// Endpoint is overridable via ?server=host:port (or ?server=http://host:port);
+// defaults to the standard local MTPLX server. The target must allow this origin via CORS.
+const API   = (() => {
+  const q = new URLSearchParams(location.search).get('server');
+  const s = (q || '127.0.0.1:8000').trim().replace(/\/+$/, '');
+  return /^https?:\/\//i.test(s) ? s : 'http://' + s;
+})();
+const API_HOST = API.replace(/^https?:\/\//i, '');
+document.querySelectorAll('#host-banner, #host-footer').forEach(el => { el.textContent = API_HOST; });
 const POLL  = 1000;
 const RING  = 120;          // client-side ring buffer of completed requests
 const CTX_MAX = 262144;

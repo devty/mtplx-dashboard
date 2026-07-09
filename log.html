@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230b0e14'/%3E%3Cpath d='M55 10 28 56h18l-5 34 31-48H52z' fill='%233b82f6'/%3E%3C/svg%3E">
 <title>MTPLX — live activity log</title>
 <style>
 /* ---------------------------------------------------------------- tokens (shared with dashboard) */
@@ -206,16 +207,24 @@ footer code { font: 11px ui-monospace, Menlo, monospace; }
     <span style="font-family:ui-monospace,Menlo,monospace">openai</span>, so caller attribution is approximate.
   </div>
 
-  <div id="banner"><b>Connection lost.</b> Unable to reach <span style="font-variant-numeric:tabular-nums">127.0.0.1:8000</span> — showing the last requests seen at <span id="banner-time">—</span>. Retrying every second…</div>
+  <div id="banner"><b>Connection lost.</b> Unable to reach <span id="host-banner" style="font-variant-numeric:tabular-nums">127.0.0.1:8000</span> — showing the last requests seen at <span id="banner-time">—</span>. Retrying every second…</div>
 
   <div id="feed"><div class="empty-state" id="empty">Waiting for the first completed request…</div></div>
 
-  <footer>polling <code>127.0.0.1:8000/metrics</code> every 1 s · newest first · rolling buffer of <span id="f-ring">300</span> requests · <a href="index.html" style="color:var(--muted)">back to dashboard</a></footer>
+  <footer>polling <code><span id="host-footer">127.0.0.1:8000</span>/metrics</code> every 1 s · newest first · rolling buffer of <span id="f-ring">300</span> requests · <a href="index.html" style="color:var(--muted)">back to dashboard</a></footer>
 </div>
 
 <script>
 'use strict';
-const API = 'http://127.0.0.1:8000';
+// Endpoint is overridable via ?server=host:port (or ?server=http://host:port);
+// defaults to the standard local MTPLX server. The target must allow this origin via CORS.
+const API = (() => {
+  const q = new URLSearchParams(location.search).get('server');
+  const s = (q || '127.0.0.1:8000').trim().replace(/\/+$/, '');
+  return /^https?:\/\//i.test(s) ? s : 'http://' + s;
+})();
+const API_HOST = API.replace(/^https?:\/\//i, '');
+document.querySelectorAll('#host-banner, #host-footer').forEach(el => { el.textContent = API_HOST; });
 const POLL = 1000;
 const BUFFER = 300;
 const ACTIVE_WINDOW = 5000;

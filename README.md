@@ -11,6 +11,12 @@ step, no npm, no CDNs — just point a static file server at the folder and open
 > that into (1) a dashboard that tells the *speculative-decoding* story at a glance, and
 > (2) a "tail -f for the model" live log of what's being generated right now.
 
+### Dashboard
+![MTPLX metrics dashboard](docs/dashboard.png)
+
+### Live activity log
+![MTPLX live activity log](docs/live-log.png)
+
 ---
 
 ## Two pages
@@ -57,14 +63,23 @@ Serve it over **http** (not `file://`) so the browser sends an `Origin` header �
 server reflects it in its CORS response, which is exactly why no proxy is needed.
 
 ### Pointing at a different host/port
-Each file has a single endpoint constant near the top of its `<script>`:
 
-```js
-const API = 'http://127.0.0.1:8000';
+The quickest way — no editing — is the **`?server=` query parameter**, honored by both pages:
+
+```
+http://127.0.0.1:8123/?server=192.168.1.50:8000          # host:port  → http://host:port
+http://127.0.0.1:8123/log.html?server=https://box.local  # or a full scheme+host
 ```
 
-Change it in both `index.html` and `log.html` to target a remote or differently-ported server
-(the server must allow the dashboard's origin via CORS).
+The connection banner and footer update to show the target you pointed at. To change the
+**default** instead, each file has a single constant near the top of its `<script>`:
+
+```js
+const API = (() => { ... })();   // defaults to 127.0.0.1:8000, overridden by ?server=
+```
+
+Either way, the target server must allow the dashboard's origin via CORS (MTPLX reflects the
+request `Origin`, so this works out of the box).
 
 ---
 

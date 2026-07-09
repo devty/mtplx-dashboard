@@ -23,7 +23,7 @@ build step for the frontend.
 
 ## Two pages
 
-### `index.html` — Metrics dashboard
+### `public/index.html` — Metrics dashboard
 The hero is **speculative decoding**: tokens committed per verify pass (an autoregressive
 decoder yields 1.0), accepted-vs-drafted per depth, and acceptance probability — the numbers
 that explain *why* MTP is fast. Around it:
@@ -34,7 +34,7 @@ that explain *why* MTP is fast. Around it:
 - **Verify-time breakdown** — where decode time actually goes
 - **KV cache** (RAM/SSD source + hit) and **tool-call parse health**
 
-### `log.html` — Live activity log
+### `public/log.html` — Live activity log
 One row per completed request, newest first:
 
 - **Headline:** the prompt (server-truncated preview)
@@ -90,6 +90,28 @@ The server polls a single, configured MTPLX target — set these as environment 
 ```bash
 MTPLX_URL=http://box.local:8000 npm run dev
 ```
+
+### Project layout
+
+```
+mtplx-dashboard/
+├── server/              TypeScript server — polls MTPLX, pushes SSE
+│   ├── server.ts          Express app: serves public/, /api/events (SSE), /api/metrics
+│   ├── metricsPoller.ts   Poll loop, retry/backoff, ring/log buffers, change detection
+│   ├── sse.ts             SSE client registry, broadcast, heartbeat
+│   ├── config.ts          Env var → config
+│   └── types.ts           Shared MetricsRecord / StatePayload shapes
+├── public/              Static frontend — plain HTML/CSS/JS, no build step
+│   ├── index.html         Metrics dashboard
+│   └── log.html           Live activity log
+├── docs/                README screenshots
+├── package.json         Scripts: dev / build / start / typecheck
+├── tsconfig.json
+└── .env.example         Documents the env vars below (not auto-loaded)
+```
+
+`npm run dev`/`npm start` compile nothing on their own from `public/` — those two files are served
+as-is by `express.static`. Only `server/**/*.ts` goes through TypeScript.
 
 ---
 

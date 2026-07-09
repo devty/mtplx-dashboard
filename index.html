@@ -1,0 +1,804 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MTPLX — inference metrics</title>
+<style>
+/* ---------------------------------------------------------------- tokens */
+:root {
+  --page:        #f9f9f7;
+  --surface:     #fcfcfb;
+  --ink:         #0b0b0b;
+  --ink-2:       #52514e;
+  --muted:       #898781;
+  --grid:        #e1e0d9;
+  --baseline:    #c3c2b7;
+  --border:      rgba(11,11,11,0.10);
+
+  /* categorical slots (fixed order) */
+  --s1: #2a78d6;  /* blue   */
+  --s2: #1baf7a;  /* aqua   */
+  --s3: #eda100;  /* yellow */
+  --s4: #008300;  /* green  */
+
+  /* blue ramp (sequential / meter tracks) */
+  --blue-track:  #b7d3f6;
+  --blue-wash:   rgba(42,120,214,0.10);
+
+  /* status (reserved) */
+  --good:        #0ca30c;
+  --good-text:   #006300;
+  --warning:     #fab219;
+  --critical:    #d03b3b;
+
+  --shadow: 0 1px 2px rgba(11,11,11,0.04), 0 4px 14px rgba(11,11,11,0.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page:        #0d0d0d;
+    --surface:     #1a1a19;
+    --ink:         #ffffff;
+    --ink-2:       #c3c2b7;
+    --muted:       #898781;
+    --grid:        #2c2c2a;
+    --baseline:    #383835;
+    --border:      rgba(255,255,255,0.10);
+
+    --s1: #3987e5;
+    --s2: #199e70;
+    --s3: #c98500;
+    --s4: #008300;
+
+    --blue-track:  #0d366b;
+    --blue-wash:   rgba(57,135,229,0.12);
+
+    --good:        #0ca30c;
+    --good-text:   #0ca30c;
+
+    --shadow: 0 1px 2px rgba(0,0,0,0.30), 0 4px 14px rgba(0,0,0,0.25);
+  }
+}
+
+/* ---------------------------------------------------------------- base */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--page);
+  color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1360px; margin: 0 auto; padding: 20px 24px 48px; }
+
+/* ---------------------------------------------------------------- header */
+header {
+  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  padding: 6px 2px 16px;
+}
+.brand { font-size: 19px; font-weight: 700; letter-spacing: 0.04em; }
+.brand small { font-weight: 400; color: var(--ink-2); letter-spacing: 0; margin-left: 10px; font-size: 13px; }
+.nav { display: flex; gap: 4px; margin-left: 2px; }
+.nav a {
+  font-size: 12.5px; color: var(--ink-2); text-decoration: none;
+  padding: 4px 11px; border-radius: 7px; border: 1px solid transparent;
+}
+.nav a:hover { color: var(--ink); background: rgba(11,11,11,0.035); }
+.nav a.active { color: var(--ink); border-color: var(--border); background: var(--surface); font-weight: 600; }
+@media (prefers-color-scheme: dark) { .nav a:hover { background: rgba(255,255,255,0.05); } }
+.model-chip {
+  font-size: 12px; color: var(--ink-2);
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 3px 10px; background: var(--surface);
+  font-variant-numeric: tabular-nums;
+  max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.head-right { margin-left: auto; display: flex; align-items: center; gap: 16px; font-size: 12.5px; color: var(--ink-2); }
+.status-pill { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: var(--ink); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.active { background: var(--good); animation: pulse 1.6s ease-out infinite; }
+.dot.offline { background: var(--critical); }
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(12,163,12,0.45); }
+  70%  { box-shadow: 0 0 0 7px rgba(12,163,12,0); }
+  100% { box-shadow: 0 0 0 0 rgba(12,163,12,0); }
+}
+.head-right .sep { color: var(--baseline); }
+.head-right b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------- banner */
+#banner {
+  display: none;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--critical);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--critical) 8%, var(--surface));
+  color: var(--ink);
+  font-size: 13px;
+}
+#banner b { color: var(--critical); }
+body.disconnected #banner { display: block; }
+body.disconnected main { opacity: 0.55; transition: opacity 0.4s; }
+main { transition: opacity 0.4s; }
+
+/* ---------------------------------------------------------------- grid & cards */
+main { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+.card {
+  grid-column: span 3;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 16px 18px 18px;
+  min-width: 0;
+}
+.card.hero  { grid-column: span 12; padding: 22px 26px 24px; }
+.card.wide  { grid-column: span 8; }
+.card.third { grid-column: span 4; }
+.card.half  { grid-column: span 6; }
+@media (max-width: 1080px) {
+  .card, .card.wide, .card.third, .card.half { grid-column: span 6; }
+  .card.hero { grid-column: span 12; }
+}
+@media (max-width: 680px) {
+  .card, .card.wide, .card.third, .card.half, .card.hero { grid-column: span 12; }
+}
+
+h2 {
+  font-size: 11.5px; font-weight: 600; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 2px;
+}
+.subtitle { font-size: 12px; color: var(--ink-2); margin-bottom: 12px; }
+
+/* ---------------------------------------------------------------- figures */
+.big { font-size: 30px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.15; }
+.big .unit { font-size: 14px; font-weight: 500; color: var(--ink-2); margin-left: 4px; letter-spacing: 0; }
+.hero-figure { font-size: 58px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.02; }
+.hero-figure .unit { font-size: 22px; font-weight: 500; color: var(--ink-2); margin-left: 6px; }
+.kv { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; padding: 4.5px 0; border-top: 1px solid var(--grid); }
+.kv:first-of-type { border-top: none; }
+.kv .k { color: var(--ink-2); }
+.kv .v { font-variant-numeric: tabular-nums; font-weight: 550; text-align: right; }
+.kv .v.dim { color: var(--muted); font-weight: 450; }
+
+/* ---------------------------------------------------------------- hero layout */
+.hero-grid { display: grid; grid-template-columns: 300px 1fr 260px; gap: 36px; align-items: start; }
+@media (max-width: 1080px) { .hero-grid { grid-template-columns: 1fr; gap: 22px; } }
+.hero-label { font-size: 12.5px; color: var(--ink-2); margin-top: 6px; }
+.hero-stats { margin-top: 18px; }
+
+/* depth rows */
+.depth-row { margin-bottom: 16px; }
+.depth-row:last-child { margin-bottom: 0; }
+.depth-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 12.5px; margin-bottom: 5px; }
+.depth-head .name { font-weight: 600; }
+.depth-head .nums { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.depth-head .nums b { color: var(--ink); font-weight: 650; }
+.bar-track {
+  position: relative; height: 22px; border-radius: 4px;
+  background: var(--blue-track); overflow: hidden;
+}
+.bar-fill {
+  position: absolute; inset: 0 auto 0 0;
+  background: var(--s1);
+  border-radius: 4px 0 0 4px;
+  transition: width 0.45s cubic-bezier(.25,.7,.3,1);
+}
+.bar-fill.rounded { border-radius: 4px; }
+.prob-line { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 11.5px; color: var(--ink-2); }
+.prob-meter { flex: 1; height: 4px; border-radius: 2px; background: var(--grid); overflow: hidden; }
+.prob-meter i { display: block; height: 100%; background: var(--s1); border-radius: 2px; transition: width 0.45s; }
+.prob-line .pv { font-variant-numeric: tabular-nums; font-weight: 550; color: var(--ink); min-width: 38px; text-align: right; }
+
+.legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px; font-size: 11.5px; color: var(--ink-2); }
+.legend .key { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+
+/* ---------------------------------------------------------------- sparklines */
+.spark { position: relative; height: 54px; margin-top: 10px; }
+.spark svg { display: block; width: 100%; height: 100%; }
+.spark .tip {
+  position: absolute; pointer-events: none; display: none;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 7px;
+  box-shadow: var(--shadow);
+  padding: 4px 8px; font-size: 11px; white-space: nowrap;
+  font-variant-numeric: tabular-nums; color: var(--ink); z-index: 5;
+  transform: translate(-50%, -125%);
+}
+.spark.tall { height: 74px; }
+.spark-cap { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+/* ---------------------------------------------------------------- meters */
+.meter { position: relative; height: 14px; border-radius: 4px; background: var(--blue-track); overflow: hidden; margin-top: 10px; }
+.meter i { position: absolute; inset: 0 auto 0 0; background: var(--s1); border-radius: 4px 0 0 4px; min-width: 2px; transition: width 0.45s; }
+.meter-cap { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--ink-2); margin-top: 5px; font-variant-numeric: tabular-nums; }
+
+/* composition strip (2px surface gaps between segments) */
+.strip { display: flex; height: 20px; gap: 2px; border-radius: 4px; overflow: hidden; margin-top: 10px; }
+.strip i { display: block; height: 100%; min-width: 3px; transition: flex-grow 0.45s; }
+.strip i:first-child { border-radius: 4px 0 0 4px; }
+.strip i:last-child { border-radius: 0 4px 4px 0; }
+.strip i:only-child { border-radius: 4px; }
+
+/* breakdown legend rows */
+.rows { margin-top: 12px; }
+.brow { display: flex; align-items: center; gap: 9px; font-size: 12.5px; padding: 5px 0; border-top: 1px solid var(--grid); }
+.brow:first-child { border-top: none; }
+.brow .name { color: var(--ink-2); flex: 1; }
+.brow .val  { font-variant-numeric: tabular-nums; font-weight: 550; }
+.brow .pct  { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 44px; text-align: right; }
+
+/* badges */
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; font-weight: 650; letter-spacing: 0.05em;
+  border-radius: 6px; padding: 3px 9px;
+  border: 1px solid var(--border); color: var(--ink-2); background: transparent;
+}
+.badge.blue { color: var(--s1); border-color: color-mix(in srgb, var(--s1) 40%, transparent); background: var(--blue-wash); }
+.badge.ok   { color: var(--good-text); border-color: color-mix(in srgb, var(--good) 40%, transparent); background: color-mix(in srgb, var(--good) 9%, transparent); }
+.badge.bad  { color: var(--critical); border-color: color-mix(in srgb, var(--critical) 40%, transparent); background: color-mix(in srgb, var(--critical) 9%, transparent); }
+
+.mini-note { font-size: 11px; color: var(--muted); margin-top: 10px; }
+footer { margin-top: 22px; font-size: 11.5px; color: var(--muted); text-align: center; }
+footer code { font: 11px ui-monospace, Menlo, monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">MTPLX<small>inference metrics</small></div>
+    <nav class="nav">
+      <a href="index.html" class="active">Dashboard</a>
+      <a href="log.html">Live log</a>
+    </nav>
+    <div class="model-chip" id="model-chip">model: —</div>
+    <div class="head-right">
+      <span class="status-pill"><span class="dot" id="status-dot"></span><span id="status-text">connecting</span></span>
+      <span class="sep">·</span>
+      <span>last request <b id="last-req">—</b></span>
+      <span class="sep">·</span>
+      <span>updated <b id="updated">—</b></span>
+    </div>
+  </header>
+
+  <div id="banner"><b>Connection lost.</b> Unable to reach <span style="font-variant-numeric:tabular-nums">127.0.0.1:8000</span> — showing last data from <span id="banner-time">—</span>. Retrying every second…</div>
+
+  <main>
+
+    <!-- ===================================================== HERO -->
+    <section class="card hero">
+      <h2>Speculative decoding</h2>
+      <div class="subtitle">Multi-token prediction — tokens drafted ahead, verified, and committed per target-model pass</div>
+      <div class="hero-grid">
+
+        <div>
+          <div class="hero-figure"><span id="hero-speedup">—</span><span class="unit">tok / pass</span></div>
+          <div class="hero-label">tokens committed per verify call — an autoregressive decoder yields 1.0</div>
+          <div class="hero-stats">
+            <div class="kv"><span class="k">Overall acceptance</span><span class="v" id="h-accept">—</span></div>
+            <div class="kv"><span class="k">Drafted tokens</span><span class="v" id="h-drafted">—</span></div>
+            <div class="kv"><span class="k">Accepted tokens</span><span class="v" id="h-accepted">—</span></div>
+            <div class="kv"><span class="k">Bonus tokens</span><span class="v" id="h-bonus">—</span></div>
+            <div class="kv"><span class="k">Correction tokens</span><span class="v" id="h-corr">—</span></div>
+            <div class="kv"><span class="k">Verify calls</span><span class="v" id="h-verify">—</span></div>
+          </div>
+        </div>
+
+        <div>
+          <div id="depths"></div>
+          <div class="legend">
+            <span class="key"><span class="swatch" style="background:var(--s1)"></span>accepted</span>
+            <span class="key"><span class="swatch" style="background:var(--blue-track)"></span>drafted (not accepted)</span>
+            <span class="key" style="margin-left:auto">thin meter = mean accept probability</span>
+          </div>
+        </div>
+
+        <div>
+          <div style="font-size:12.5px;color:var(--ink-2);font-weight:600">Acceptance rate, recent requests</div>
+          <div class="spark tall" id="spark-accept"></div>
+          <div class="spark-cap" id="spark-accept-cap">—</div>
+          <div class="kv" style="margin-top:14px"><span class="k">Last request</span><span class="v" id="h-lastreq">—</span></div>
+          <div class="kv"><span class="k">MTP depth</span><span class="v" id="h-depth">—</span></div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ===================================================== ROW 2 -->
+    <section class="card">
+      <h2>Decode throughput</h2>
+      <div class="big"><span id="t-decode">—</span><span class="unit">tok/s</span></div>
+      <div class="spark" id="spark-decode"></div>
+      <div class="spark-cap">per completed request</div>
+    </section>
+
+    <section class="card">
+      <h2>Prefill throughput</h2>
+      <div class="big"><span id="t-prefill">—</span><span class="unit">tok/s</span></div>
+      <div class="spark" id="spark-prefill"></div>
+      <div class="spark-cap">per completed request</div>
+    </section>
+
+    <section class="card">
+      <h2>Time to first token</h2>
+      <div class="big"><span id="l-ttft">—</span><span class="unit">s</span></div>
+      <div class="spark" id="spark-ttft"></div>
+      <div class="kv" style="margin-top:8px"><span class="k">Decode elapsed</span><span class="v" id="l-decode">—</span></div>
+      <div class="kv"><span class="k">Request total</span><span class="v" id="l-total">—</span></div>
+    </section>
+
+    <section class="card">
+      <h2>Context window</h2>
+      <div class="big"><span id="c-used">—</span><span class="unit">/ 262K tok</span></div>
+      <div class="meter"><i id="c-meter"></i></div>
+      <div class="meter-cap"><span id="c-pct">—</span><span>262,144 max</span></div>
+      <div class="strip" id="c-strip" title=""></div>
+      <div class="legend" style="margin-top:8px">
+        <span class="key"><span class="swatch" style="background:var(--s1)"></span>cached <b id="c-cached" style="font-weight:600;color:var(--ink)">—</b></span>
+        <span class="key"><span class="swatch" style="background:var(--s2)"></span>fresh prefill <b id="c-fresh" style="font-weight:600;color:var(--ink)">—</b></span>
+      </div>
+    </section>
+
+    <!-- ===================================================== ROW 3 -->
+    <section class="card half">
+      <h2>Verify-time breakdown</h2>
+      <div class="subtitle">Where instrumented decode work goes — share of measured components (phases can overlap wall-clock)</div>
+      <div class="strip" id="v-strip" style="height:22px"></div>
+      <div class="rows" id="v-rows"></div>
+      <div class="mini-note">Decode wall-clock: <span id="v-wall" style="font-variant-numeric:tabular-nums">—</span></div>
+    </section>
+
+    <section class="card">
+      <h2>KV cache</h2>
+      <div style="margin:10px 0 4px; display:flex; gap:8px; align-items:center;">
+        <span class="badge blue" id="k-source">—</span>
+        <span class="badge" id="k-hit">—</span>
+      </div>
+      <div class="rows">
+        <div class="kv"><span class="k">Cached tokens</span><span class="v" id="k-tokens">—</span></div>
+        <div class="kv"><span class="k">Restore time</span><span class="v" id="k-restore">—</span></div>
+        <div class="kv"><span class="k">SSD cache hit</span><span class="v" id="k-ssd">—</span></div>
+        <div class="kv"><span class="k">SSD cached tokens</span><span class="v" id="k-ssdtok">—</span></div>
+      </div>
+
+    </section>
+
+    <section class="card">
+      <h2>Tool-call parsing</h2>
+      <div style="display:flex; align-items:baseline; gap:10px; margin-top:6px;">
+        <div class="big" style="font-size:24px"><span id="p-rate">—</span><span class="unit">clean</span></div>
+      </div>
+      <div class="strip" id="p-strip" style="height:10px"></div>
+      <div class="rows" id="p-rows" style="margin-top:8px"></div>
+    </section>
+
+  </main>
+
+  <footer>polling <code>127.0.0.1:8000/metrics</code> every 1 s · history persists client-side (last <span id="f-ring">120</span> requests)</footer>
+</div>
+
+<script>
+'use strict';
+/* ================================================================= config */
+const API   = 'http://127.0.0.1:8000';
+const POLL  = 1000;
+const RING  = 120;          // client-side ring buffer of completed requests
+const CTX_MAX = 262144;
+const ACTIVE_WINDOW = 5000; // ms after a change we call the server "active"
+
+/* ================================================================= state */
+const rings = { decode: [], prefill: [], ttft: [], accept: [] };
+let lastSig = null;
+let lastChangeAt = null;    // wall-clock ms of last observed new request
+let lastOkAt = null;        // last successful poll
+let seeded = false;
+let connected = false;
+
+/* ================================================================= utils */
+const $ = s => document.getElementById(s);
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function fmt(n, d = 1) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function fmtInt(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return Math.round(n).toLocaleString('en-US');
+}
+function fmtCompact(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (Math.abs(n) >= 1e4) return (n / 1e3).toFixed(1) + 'K';
+  return fmtInt(n);
+}
+function fmtSec(s) {
+  if (s === null || s === undefined || Number.isNaN(s)) return '—';
+  if (s < 0.001) return '<1 ms';
+  if (s < 1) return fmt(s * 1000, 0) + ' ms';
+  return fmt(s, 2) + ' s';
+}
+function fmtAgo(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's ago';
+  return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm ago';
+}
+const clock = d => d.toLocaleTimeString('en-US', { hour12: false });
+const sum = a => (a || []).reduce((x, y) => x + (y || 0), 0);
+
+function sig(m) {
+  if (!m) return null;
+  return [m.session_id, m.request_elapsed_s, m.prompt_tokens, m.completion_tokens, m.ttft_s].join('|');
+}
+function push(ring, v) {
+  ring.push(v);
+  if (ring.length > RING) ring.shift();
+}
+function sample(m) {
+  const drafted = sum(m.drafted_by_depth);
+  return {
+    decode:  m.display_decode_tok_s ?? m.decode_tok_s ?? null,
+    prefill: m.prefill_tok_s ?? m.prompt_tps ?? null,
+    ttft:    m.ttft_s ?? null,
+    accept:  drafted > 0 ? sum(m.accepted_by_depth) / drafted : null,
+  };
+}
+function pushSample(m) {
+  const s = sample(m);
+  push(rings.decode, s.decode);
+  push(rings.prefill, s.prefill);
+  push(rings.ttft, s.ttft);
+  push(rings.accept, s.accept);
+}
+
+/* ================================================================= sparkline
+   Hand-rolled SVG sparkline: 2px line, 10% area wash, 8px end-dot with a
+   2px surface ring, crosshair + tooltip on hover. Single series → no legend;
+   the card title names it. */
+function makeSpark(el, opts) {
+  const tip = document.createElement('div');
+  tip.className = 'tip';
+  el.appendChild(tip);
+  let data = [], geom = null;
+
+  function render(d) {
+    data = d.filter ? d : [];
+    const vals = data.filter(v => v !== null && v !== undefined);
+    const old = el.querySelector('svg');
+    if (old) old.remove();
+    if (vals.length < 2) { geom = null; return; }
+
+    const w = el.clientWidth || 240, h = el.clientHeight || 54;
+    const pad = 6, dotR = 4;
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    if (opts.zeroBase) lo = Math.min(lo, 0);
+    if (hi === lo) { hi += 1; lo -= 1; }
+    const span = hi - lo;
+    lo -= span * 0.08; hi += span * 0.08;
+
+    const n = data.length;
+    const X = i => pad + (i / (n - 1)) * (w - pad * 2 - dotR);
+    const Y = v => h - pad - ((v - lo) / (hi - lo)) * (h - pad * 2);
+    geom = { X, Y, w, h, n };
+
+    let path = '', area = '';
+    data.forEach((v, i) => {
+      if (v === null || v === undefined) return;
+      const cmd = path === '' ? 'M' : 'L';
+      path += `${cmd}${X(i).toFixed(1)},${Y(v).toFixed(1)}`;
+    });
+    const first = data.findIndex(v => v != null);
+    const lastI = n - 1 - [...data].reverse().findIndex(v => v != null);
+    if (first >= 0 && lastI > first) {
+      area = path + `L${X(lastI).toFixed(1)},${h - 2}L${X(first).toFixed(1)},${h - 2}Z`;
+    }
+    const color = css(opts.color || '--s1');
+    const surface = css('--surface');
+    const lastV = data[lastI];
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    svg.innerHTML =
+      `<line x1="0" y1="${h - 1}" x2="${w}" y2="${h - 1}" stroke="${css('--grid')}" stroke-width="1"/>` +
+      (area ? `<path d="${area}" fill="${color}" opacity="0.10"/>` : '') +
+      `<path d="${path}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>` +
+      `<line class="xh" x1="0" y1="${pad}" x2="0" y2="${h - pad}" stroke="${css('--baseline')}" stroke-width="1" opacity="0"/>` +
+      `<circle class="hd" r="${dotR}" fill="${color}" stroke="${surface}" stroke-width="2" opacity="0"/>` +
+      (lastV != null ? `<circle cx="${X(lastI).toFixed(1)}" cy="${Y(lastV).toFixed(1)}" r="${dotR}" fill="${color}" stroke="${surface}" stroke-width="2"/>` : '');
+    el.insertBefore(svg, tip);
+  }
+
+  el.addEventListener('mousemove', e => {
+    if (!geom || !data.length) return;
+    const r = el.getBoundingClientRect();
+    const fx = (e.clientX - r.left) / r.width * geom.w;
+    let i = Math.round((fx - 6) / (geom.w - 12 - 4) * (geom.n - 1));
+    i = Math.max(0, Math.min(geom.n - 1, i));
+    const v = data[i];
+    if (v == null) { tip.style.display = 'none'; return; }
+    const svg = el.querySelector('svg');
+    const xh = svg.querySelector('.xh'), hd = svg.querySelector('.hd');
+    xh.setAttribute('x1', geom.X(i)); xh.setAttribute('x2', geom.X(i)); xh.setAttribute('opacity', '0.6');
+    hd.setAttribute('cx', geom.X(i)); hd.setAttribute('cy', geom.Y(v)); hd.setAttribute('opacity', '1');
+    tip.style.display = 'block';
+    tip.style.left = (geom.X(i) / geom.w * 100) + '%';
+    tip.style.top = (geom.Y(v) / geom.h * 100) + '%';
+    const ago = data.length - 1 - i;
+    tip.textContent = opts.format(v) + (ago === 0 ? ' · latest' : ` · ${ago} req ago`);
+  });
+  el.addEventListener('mouseleave', () => {
+    tip.style.display = 'none';
+    const svg = el.querySelector('svg');
+    if (svg) { svg.querySelector('.xh')?.setAttribute('opacity', '0'); svg.querySelector('.hd')?.setAttribute('opacity', '0'); }
+  });
+  return { render };
+}
+
+const sparks = {
+  decode:  makeSpark($('spark-decode'),  { color: '--s1', format: v => fmt(v, 1) + ' tok/s' }),
+  prefill: makeSpark($('spark-prefill'), { color: '--s1', format: v => fmt(v, 0) + ' tok/s' }),
+  ttft:    makeSpark($('spark-ttft'),    { color: '--s1', format: v => fmtSec(v) }),
+  accept:  makeSpark($('spark-accept'),  { color: '--s1', format: v => fmt(v * 100, 1) + '% accepted' }),
+};
+
+/* ================================================================= renderers */
+function renderHero(m) {
+  const drafted = sum(m.drafted_by_depth), accepted = sum(m.accepted_by_depth);
+  const perPass = (m.verify_calls > 0 && m.completion_tokens != null)
+    ? m.completion_tokens / m.verify_calls : null;
+
+  $('hero-speedup').textContent = perPass != null ? fmt(perPass, 2) : '—';
+  $('h-accept').textContent   = drafted > 0 ? fmt(accepted / drafted * 100, 1) + '%' : '—';
+  $('h-drafted').textContent  = fmtInt(drafted);
+  $('h-accepted').textContent = fmtInt(accepted);
+  $('h-bonus').textContent    = fmtInt(m.bonus_tokens);
+  $('h-corr').textContent     = fmtInt(m.correction_tokens);
+  $('h-verify').textContent   = fmtInt(m.verify_calls);
+  $('h-depth').textContent    = m.mtp_depth != null ? String(m.mtp_depth) : '—';
+  $('h-lastreq').textContent  =
+    (m.completion_tokens != null && m.request_elapsed_s != null)
+      ? `${fmtInt(m.completion_tokens)} tok in ${fmt(m.request_elapsed_s, 1)} s` : '—';
+
+  /* per-depth bars: drafted = track, accepted = fill (part-to-whole, one ramp) */
+  const box = $('depths');
+  const acc  = m.accepted_by_depth || [];
+  const drf  = m.drafted_by_depth || [];
+  const prob = m.mean_accept_probability_by_depth || [];
+  const nD = Math.max(acc.length, drf.length);
+  const maxDrafted = Math.max(1, ...drf);
+
+  let html = '';
+  for (let i = 0; i < nD; i++) {
+    const d = drf[i] || 0, a = acc[i] || 0;
+    const rate = d > 0 ? a / d : 0;
+    const trackW = (d / maxDrafted * 100).toFixed(1);
+    const p = prob[i];
+    html += `
+      <div class="depth-row">
+        <div class="depth-head">
+          <span class="name">Depth ${i + 1}</span>
+          <span class="nums"><b>${fmtInt(a)}</b> of ${fmtInt(d)} accepted · <b>${fmt(rate * 100, 0)}%</b></span>
+        </div>
+        <div class="bar-track" style="width:${trackW}%">
+          <div class="bar-fill${rate >= 0.995 ? ' rounded' : ''}" style="width:${(rate * 100).toFixed(1)}%"></div>
+        </div>
+        <div class="prob-line">
+          <span>mean accept probability</span>
+          <span class="prob-meter"><i style="width:${p != null ? (p * 100).toFixed(1) : 0}%"></i></span>
+          <span class="pv">${p != null ? fmt(p * 100, 0) + '%' : '—'}</span>
+        </div>
+      </div>`;
+  }
+  box.innerHTML = html || '<div class="mini-note">no speculative data yet</div>';
+
+  sparks.accept.render(rings.accept);
+  const vals = rings.accept.filter(v => v != null);
+  if (vals.length) {
+    $('spark-accept-cap').textContent =
+      `last ${vals.length} requests · min ${fmt(Math.min(...vals) * 100, 0)}% · max ${fmt(Math.max(...vals) * 100, 0)}%`;
+  }
+}
+
+function renderThroughput(m) {
+  $('t-decode').textContent  = fmt(m.display_decode_tok_s ?? m.decode_tok_s, 1);
+  $('t-prefill').textContent = fmt(m.prefill_tok_s ?? m.prompt_tps, 0);
+  sparks.decode.render(rings.decode);
+  sparks.prefill.render(rings.prefill);
+}
+
+function renderLatency(m) {
+  $('l-ttft').textContent  = fmt(m.ttft_s, 2);
+  $('l-decode').textContent = fmtSec(m.decode_elapsed_s);
+  $('l-total').textContent  = fmtSec(m.request_elapsed_s);
+  sparks.ttft.render(rings.ttft);
+}
+
+function renderContext(m) {
+  const used = m.context_len ?? ((m.prompt_tokens || 0) + (m.completion_tokens || 0));
+  const pct = used / CTX_MAX * 100;
+  $('c-used').textContent = fmtCompact(used);
+  $('c-meter').style.width = Math.min(100, pct).toFixed(2) + '%';
+  $('c-pct').textContent = fmt(pct, 1) + '% used';
+  const cached = m.cached_tokens || 0, fresh = m.new_prefill_tokens || 0;
+  $('c-cached').textContent = fmtCompact(cached);
+  $('c-fresh').textContent  = fmtCompact(fresh);
+  const strip = $('c-strip');
+  strip.innerHTML =
+    `<i style="flex-grow:${Math.max(cached, 0.001)};background:var(--s1)" title="cached: ${fmtInt(cached)} tok"></i>` +
+    `<i style="flex-grow:${Math.max(fresh, 0.001)};background:var(--s2)" title="fresh prefill: ${fmtInt(fresh)} tok"></i>`;
+  strip.title = `prompt ${fmtInt(m.prompt_tokens)} tok = ${fmtInt(cached)} cached + ${fmtInt(fresh)} fresh`;
+}
+
+function renderVerify(m) {
+  /* categorical slots in fixed order: draft, verify fwd, verify eval, accept */
+  const parts = [
+    ['Draft (MTP heads)',   m.draft_time_s,          '--s1'],
+    ['Verify forward',      m.verify_forward_time_s, '--s2'],
+    ['Verify eval',         m.verify_eval_time_s,    '--s3'],
+    ['Accept / commit',     m.accept_time_s,         '--s4'],
+  ].filter(p => p[1] != null && p[1] > 0);
+  const total = parts.reduce((a, p) => a + p[1], 0);
+
+  const strip = $('v-strip');
+  const rows = $('v-rows');
+  if (!total) { strip.innerHTML = ''; rows.innerHTML = '<div class="mini-note">no timing data yet</div>'; return; }
+
+  strip.innerHTML = parts.map(([name, t, c]) =>
+    `<i style="flex-grow:${t};background:var(${c})" title="${name}: ${fmtSec(t)} (${fmt(t / total * 100, 1)}%)"></i>`
+  ).join('');
+  rows.innerHTML = parts.map(([name, t, c]) =>
+    `<div class="brow">
+       <span class="swatch" style="background:var(${c})"></span>
+       <span class="name">${name}</span>
+       <span class="val">${fmtSec(t)}</span>
+       <span class="pct">${fmt(t / total * 100, 1)}%</span>
+     </div>`
+  ).join('');
+  $('v-wall').textContent = fmtSec(m.decode_elapsed_s);
+}
+
+function renderCache(m) {
+  const src = (m.cache_source || '—').toUpperCase();
+  $('k-source').textContent = src + ' CACHE';
+  const hit = m.session_cache_hit;
+  const hitEl = $('k-hit');
+  hitEl.textContent = hit === true ? 'SESSION HIT' : hit === false ? 'SESSION MISS' : '—';
+  hitEl.className = 'badge ' + (hit === true ? 'ok' : hit === false ? 'bad' : '');
+  $('k-tokens').textContent  = fmtCompact(m.cached_tokens);
+  $('k-restore').textContent = fmtSec(m.cache_restore_time_s);
+  $('k-ssd').textContent     = m.ssd_cache_hit === true ? 'yes' : m.ssd_cache_hit === false ? 'no' : '—';
+  $('k-ssdtok').textContent  = fmtCompact(m.ssd_cached_tokens);
+}
+
+function renderToolParse(c) {
+  if (!c) return;
+  const ok = c.tool_parse_success || 0;
+  const bads = [
+    ['fallback parses',    c.tool_parse_fallback],
+    ['unknown tool name',  c.unknown_tool_name],
+    ['malformed calls',    c.malformed_tool_call],
+    ['unclosed calls',     c.unclosed_tool_call],
+  ];
+  const bad = bads.reduce((a, b) => a + (b[1] || 0), 0);
+  const total = ok + bad;
+  $('p-rate').textContent = total > 0 ? fmt(ok / total * 100, 1) + '%' : '—';
+
+  $('p-strip').innerHTML = total > 0
+    ? `<i style="flex-grow:${Math.max(ok, 0.001)};background:var(--good)" title="clean parses: ${ok}"></i>` +
+      (bad > 0 ? `<i style="flex-grow:${bad};background:var(--critical)" title="problem parses: ${bad}"></i>` : '')
+    : '';
+
+  $('p-rows').innerHTML =
+    `<div class="brow"><span class="swatch" style="background:var(--good)"></span><span class="name">clean parses</span><span class="val">${fmtInt(ok)}</span></div>` +
+    bads.map(([n, v]) => {
+      const bd = v || 0;
+      return `<div class="brow"><span class="swatch" style="background:${bd > 0 ? 'var(--critical)' : 'var(--grid)'}"></span><span class="name">${n}</span><span class="val" ${bd > 0 ? 'style="color:var(--critical)"' : ''}>${fmtInt(bd)}</span></div>`;
+    }).join('');
+}
+
+function renderAll(data) {
+  const m = data.latest || {};
+  renderHero(m);
+  renderThroughput(m);
+  renderLatency(m);
+  renderContext(m);
+  renderVerify(m);
+  renderCache(m);
+  renderToolParse(data.tool_parse_counters);
+}
+
+/* ================================================================= status */
+function renderStatus() {
+  const dot = $('status-dot'), txt = $('status-text');
+  const now = Date.now();
+  if (!connected) {
+    dot.className = 'dot offline'; txt.textContent = 'offline';
+  } else if (lastChangeAt && now - lastChangeAt < ACTIVE_WINDOW) {
+    dot.className = 'dot active'; txt.textContent = 'active';
+  } else {
+    dot.className = 'dot'; txt.textContent = 'idle';
+  }
+  $('last-req').textContent = lastChangeAt ? fmtAgo(now - lastChangeAt) : 'before this session';
+  $('updated').textContent = lastOkAt ? clock(new Date(lastOkAt)) : '—';
+}
+
+/* ================================================================= polling */
+function fetchTimeout(url, ms) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  return fetch(url, { signal: ctl.signal, cache: 'no-store' }).finally(() => clearTimeout(t));
+}
+
+async function poll() {
+  try {
+    const res = await fetchTimeout(API + '/metrics', 2500);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const m = data.latest;
+    const newSig = sig(m);
+
+    if (!seeded) {
+      /* seed sparkline history from the server's rolling window (oldest→newest) */
+      (data.recent || []).forEach(r => pushSample(r));
+      const rec = data.recent || [];
+      if (m && (!rec.length || sig(rec[rec.length - 1]) !== newSig)) pushSample(m);
+      seeded = true;
+      lastSig = newSig;
+      renderAll(data);
+    } else if (newSig !== lastSig) {
+      if (m) pushSample(m);
+      lastSig = newSig;
+      lastChangeAt = Date.now();
+      renderAll(data);
+    }
+
+    lastOkAt = Date.now();
+    if (!connected) {
+      connected = true;
+      document.body.classList.remove('disconnected');
+      renderAll(data); /* re-render un-dimmed with fresh data after an outage */
+    }
+  } catch (err) {
+    if (connected || lastOkAt === null) {
+      connected = false;
+      document.body.classList.add('disconnected');
+      $('banner-time').textContent = lastOkAt ? clock(new Date(lastOkAt)) : '(no data received yet)';
+    }
+  }
+  renderStatus();
+}
+
+async function fetchModel() {
+  try {
+    const res = await fetchTimeout(API + '/v1/models', 2500);
+    const j = await res.json();
+    const id = j?.data?.[0]?.id;
+    if (id) { $('model-chip').textContent = id; return; }
+  } catch (e) { /* retry below */ }
+  setTimeout(fetchModel, 5000);
+}
+
+$('f-ring').textContent = String(RING);
+fetchModel();
+poll();
+setInterval(poll, POLL);
+setInterval(renderStatus, 1000);
+
+/* re-render sparklines on resize (they are sized to the container) */
+let rz;
+window.addEventListener('resize', () => {
+  clearTimeout(rz);
+  rz = setTimeout(() => {
+    sparks.decode.render(rings.decode);
+    sparks.prefill.render(rings.prefill);
+    sparks.ttft.render(rings.ttft);
+    sparks.accept.render(rings.accept);
+  }, 150);
+});
+</script>
+</body>
+</html>

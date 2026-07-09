@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MTPLX — live activity log</title>
+<style>
+/* ---------------------------------------------------------------- tokens (shared with dashboard) */
+:root {
+  --page:        #f9f9f7;
+  --surface:     #fcfcfb;
+  --ink:         #0b0b0b;
+  --ink-2:       #52514e;
+  --muted:       #898781;
+  --grid:        #e1e0d9;
+  --baseline:    #c3c2b7;
+  --border:      rgba(11,11,11,0.10);
+
+  --s1: #2a78d6;  /* blue   */
+  --s2: #1baf7a;  /* aqua   */
+  --s3: #eda100;  /* yellow */
+  --s4: #008300;  /* green  */
+
+  --blue-track:  #b7d3f6;
+  --blue-wash:   rgba(42,120,214,0.10);
+
+  --good:        #0ca30c;
+  --good-text:   #006300;
+  --warning:     #fab219;
+  --critical:    #d03b3b;
+
+  --shadow: 0 1px 2px rgba(11,11,11,0.04), 0 4px 14px rgba(11,11,11,0.05);
+  --chip-bg: rgba(11,11,11,0.035);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page:        #0d0d0d;
+    --surface:     #1a1a19;
+    --ink:         #ffffff;
+    --ink-2:       #c3c2b7;
+    --muted:       #898781;
+    --grid:        #2c2c2a;
+    --baseline:    #383835;
+    --border:      rgba(255,255,255,0.10);
+
+    --s1: #3987e5;
+    --s2: #199e70;
+    --s3: #c98500;
+    --s4: #008300;
+
+    --blue-track:  #0d366b;
+    --blue-wash:   rgba(57,135,229,0.12);
+
+    --good:        #0ca30c;
+    --good-text:   #0ca30c;
+
+    --shadow: 0 1px 2px rgba(0,0,0,0.30), 0 4px 14px rgba(0,0,0,0.25);
+    --chip-bg: rgba(255,255,255,0.05);
+  }
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--page);
+  color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 960px; margin: 0 auto; padding: 20px 24px 48px; }
+
+/* ---------------------------------------------------------------- header */
+header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; padding: 6px 2px 14px; }
+.brand { font-size: 19px; font-weight: 700; letter-spacing: 0.04em; }
+.brand small { font-weight: 400; color: var(--ink-2); letter-spacing: 0; margin-left: 10px; font-size: 13px; }
+.nav { display: flex; gap: 4px; margin-left: 4px; }
+.nav a {
+  font-size: 12.5px; color: var(--ink-2); text-decoration: none;
+  padding: 4px 11px; border-radius: 7px; border: 1px solid transparent;
+}
+.nav a:hover { color: var(--ink); background: var(--chip-bg); }
+.nav a.active { color: var(--ink); border-color: var(--border); background: var(--surface); font-weight: 600; }
+.head-right { margin-left: auto; display: flex; align-items: center; gap: 14px; font-size: 12.5px; color: var(--ink-2); }
+.status-pill { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: var(--ink); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.active { background: var(--good); animation: pulse 1.6s ease-out infinite; }
+.dot.offline { background: var(--critical); }
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(12,163,12,0.45); }
+  70%  { box-shadow: 0 0 0 7px rgba(12,163,12,0); }
+  100% { box-shadow: 0 0 0 0 rgba(12,163,12,0); }
+}
+.head-right .sep { color: var(--baseline); }
+.head-right b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+.note {
+  font-size: 12px; color: var(--ink-2);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 9px 14px; margin-bottom: 14px; line-height: 1.5;
+}
+.note b { color: var(--ink); font-weight: 600; }
+
+#banner {
+  display: none; margin: 0 0 14px; padding: 10px 14px;
+  border: 1px solid var(--critical); border-radius: 10px;
+  background: color-mix(in srgb, var(--critical) 8%, var(--surface));
+  color: var(--ink); font-size: 13px;
+}
+#banner b { color: var(--critical); }
+body.disconnected #feed { opacity: 0.55; }
+#feed { transition: opacity 0.4s; }
+
+/* ---------------------------------------------------------------- feed */
+#feed { display: flex; flex-direction: column; gap: 10px; }
+.row {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow); overflow: hidden;
+  animation: slideIn 0.4s cubic-bezier(.22,.7,.3,1);
+}
+.row.fresh { border-color: color-mix(in srgb, var(--s1) 45%, var(--border)); }
+@keyframes slideIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+.row-head { display: flex; gap: 12px; align-items: flex-start; padding: 13px 16px; cursor: pointer; }
+.row-head:hover { background: var(--chip-bg); }
+.rail { width: 3px; align-self: stretch; border-radius: 3px; background: var(--s1); flex: none; margin: 1px 0; }
+.row.fresh .rail { background: var(--s1); }
+.row-main { flex: 1; min-width: 0; }
+
+.prompt {
+  font-size: 14.5px; line-height: 1.4; color: var(--ink); font-weight: 500;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.prompt.empty { color: var(--muted); font-style: italic; font-weight: 400; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; align-items: center; }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; color: var(--ink-2); background: var(--chip-bg);
+  border-radius: 6px; padding: 2px 8px; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.chip b { color: var(--ink); font-weight: 600; }
+.chip .ic { color: var(--muted); font-weight: 600; font-size: 10.5px; letter-spacing: 0.03em; text-transform: uppercase; }
+.chip.accent { color: var(--s1); background: var(--blue-wash); }
+.chip.accent b { color: var(--s1); }
+.chip.think { color: var(--good-text); background: color-mix(in srgb, var(--good) 9%, transparent); }
+.chip.tool  { color: var(--s3); background: color-mix(in srgb, var(--s3) 12%, transparent); }
+.chip.tool b { color: var(--s3); }
+.chip.mono { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+
+.ago { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; align-self: flex-start; padding-top: 1px; }
+.caret { color: var(--muted); font-size: 11px; transition: transform 0.2s; flex: none; align-self: center; }
+.row.open .caret { transform: rotate(90deg); }
+
+/* ---------------------------------------------------------------- detail */
+.detail { display: none; padding: 0 16px 15px 31px; }
+.row.open .detail { display: block; }
+.detail-inner { border-top: 1px solid var(--grid); padding-top: 13px; }
+.dgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 3px 20px; }
+.dkv { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; padding: 4px 0; border-bottom: 1px solid var(--grid); min-width: 0; }
+.dkv .k { color: var(--ink-2); flex: none; }
+.dkv .v { font-variant-numeric: tabular-nums; font-weight: 550; text-align: right; min-width: 0; overflow-wrap: anywhere; }
+.dkv.full { grid-column: 1 / -1; }
+.dsection { margin-top: 13px; }
+.dsection h4 { font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin-bottom: 7px; }
+.roles { display: flex; flex-wrap: wrap; gap: 3px; }
+.rtok { font-size: 10.5px; padding: 1px 6px; border-radius: 4px; font-variant-numeric: tabular-nums; }
+.rtok.system    { background: var(--chip-bg); color: var(--muted); }
+.rtok.user      { background: var(--blue-wash); color: var(--s1); font-weight: 600; }
+.rtok.assistant { background: color-mix(in srgb, var(--s2) 14%, transparent); color: var(--s2); }
+.rtok.tool      { background: color-mix(in srgb, var(--s3) 14%, transparent); color: var(--s3); }
+.toolnames { display: flex; flex-wrap: wrap; gap: 4px; }
+.tn { font-size: 10.5px; font-family: ui-monospace, Menlo, monospace; color: var(--ink-2); background: var(--chip-bg); border-radius: 4px; padding: 1px 6px; }
+.tn.used { background: color-mix(in srgb, var(--s3) 15%, transparent); color: var(--s3); font-weight: 600; }
+.depthbars { display: flex; flex-direction: column; gap: 6px; max-width: 340px; }
+.dbar-row { display: flex; align-items: center; gap: 9px; font-size: 11.5px; }
+.dbar-row .lbl { color: var(--ink-2); width: 52px; flex: none; }
+.dbar-track { flex: 1; height: 12px; border-radius: 4px; background: var(--blue-track); overflow: hidden; }
+.dbar-track i { display: block; height: 100%; background: var(--s1); border-radius: 4px; }
+.dbar-row .pv { font-variant-numeric: tabular-nums; font-weight: 550; width: 84px; text-align: right; color: var(--ink); }
+
+.empty-state { text-align: center; color: var(--muted); font-size: 13px; padding: 48px 0; }
+footer { margin-top: 22px; font-size: 11.5px; color: var(--muted); text-align: center; }
+footer code { font: 11px ui-monospace, Menlo, monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">MTPLX<small>live activity</small></div>
+    <nav class="nav">
+      <a href="index.html">Dashboard</a>
+      <a href="log.html" class="active">Live log</a>
+    </nav>
+    <div class="head-right">
+      <span class="status-pill"><span class="dot" id="status-dot"></span><span id="status-text">connecting</span></span>
+      <span class="sep">·</span>
+      <span><b id="count">0</b> requests</span>
+    </div>
+  </header>
+
+  <div class="note">
+    <b>tail -f for the model.</b> Completed requests only — a long generation appears when it <i>finishes</i>, not mid-flight.
+    Prompt text is a server-truncated preview; no assistant response body is available from this endpoint.
+    Arrival time is stamped when this page first sees a request, so ages are approximate. Both Hermes and gbrain report as
+    <span style="font-family:ui-monospace,Menlo,monospace">openai</span>, so caller attribution is approximate.
+  </div>
+
+  <div id="banner"><b>Connection lost.</b> Unable to reach <span style="font-variant-numeric:tabular-nums">127.0.0.1:8000</span> — showing the last requests seen at <span id="banner-time">—</span>. Retrying every second…</div>
+
+  <div id="feed"><div class="empty-state" id="empty">Waiting for the first completed request…</div></div>
+
+  <footer>polling <code>127.0.0.1:8000/metrics</code> every 1 s · newest first · rolling buffer of <span id="f-ring">300</span> requests · <a href="index.html" style="color:var(--muted)">back to dashboard</a></footer>
+</div>
+
+<script>
+'use strict';
+const API = 'http://127.0.0.1:8000';
+const POLL = 1000;
+const BUFFER = 300;
+const ACTIVE_WINDOW = 5000;
+
+/* ordered newest-first; map for dedup + arrival stamp */
+const seen = new Map();      // request_id -> { firstSeen, data }
+const order = [];            // request_ids, newest first
+let connected = false, lastOkAt = null, lastArrivalAt = null;
+
+const $ = s => document.getElementById(s);
+const esc = s => (s == null ? '' : String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])));
+const sum = a => (a || []).reduce((x, y) => x + (y || 0), 0);
+
+function fmt(n, d = 1) {
+  if (n == null || Number.isNaN(n)) return '—';
+  return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function fmtInt(n) { return n == null || Number.isNaN(n) ? '—' : Math.round(n).toLocaleString('en-US'); }
+function fmtCompact(n) {
+  if (n == null || Number.isNaN(n)) return '—';
+  if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (Math.abs(n) >= 1e4) return (n / 1e3).toFixed(1) + 'K';
+  return fmtInt(n);
+}
+function fmtSec(s) {
+  if (s == null || Number.isNaN(s)) return '—';
+  if (s < 1) return fmt(s * 1000, 0) + ' ms';
+  return fmt(s, 2) + ' s';
+}
+function fmtAgo(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 3) return 'just now';
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's ago';
+  return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm ago';
+}
+const shortId = id => (id || '').replace(/^chatcmpl-/, '').slice(0, 8) || '—';
+const clock = d => d.toLocaleTimeString('en-US', { hour12: false });
+
+function acceptPct(m) {
+  const d = sum(m.drafted_by_depth);
+  return d > 0 ? sum(m.accepted_by_depth) / d : null;
+}
+
+function roleSummary(roles) {
+  if (!roles || !roles.length) return null;
+  const c = {};
+  roles.forEach(r => c[r] = (c[r] || 0) + 1);
+  return Object.entries(c).map(([r, n]) => `${n}× ${r}`).join(', ');
+}
+
+/* build one row's DOM */
+function buildRow(id) {
+  const rec = seen.get(id);
+  const m = rec.data;
+  const el = document.createElement('div');
+  el.className = 'row';
+  el.dataset.id = id;
+
+  const preview = (m.request_last_user_preview || '').trim();
+  const roles = m.request_message_roles || [];
+  const promptHtml = preview
+    ? `<div class="prompt">${esc(preview)}</div>`
+    : `<div class="prompt empty">${esc(roleSummary(roles) || 'no user text in preview')}</div>`;
+
+  const ap = acceptPct(m);
+  const toolAvail = (m.request_tool_names || []).length;
+  const toolMade = m.tool_call_count || 0;
+  const thinking = m.request_enable_thinking === true;
+  const reason = m.request_reasoning_mode;
+
+  const chips = [];
+  chips.push(`<span class="chip"><span class="ic">tok</span><b>${fmtCompact(m.prompt_tokens)}</b>→<b>${fmtInt(m.completion_tokens)}</b></span>`);
+  chips.push(`<span class="chip accent"><b>${fmt(m.decode_tok_s, 1)}</b> tok/s</span>`);
+  chips.push(`<span class="chip"><span class="ic">ttft</span><b>${fmtSec(m.ttft_s)}</b></span>`);
+  chips.push(`<span class="chip"><span class="ic">took</span><b>${fmtSec(m.request_elapsed_s)}</b></span>`);
+  chips.push(`<span class="chip"><span class="ic">depth</span><b>${fmtInt(m.request_message_count)}</b> msgs</span>`);
+  if (toolMade > 0) chips.push(`<span class="chip tool"><b>${toolMade}</b> tool ${toolMade === 1 ? 'call' : 'calls'}</span>`);
+  if (ap != null) chips.push(`<span class="chip"><span class="ic">accept</span><b>${fmt(ap * 100, 0)}%</b></span>`);
+  if (thinking) chips.push(`<span class="chip think">thinking${reason && reason !== 'auto' ? ' · ' + esc(reason) : ''}</span>`);
+  chips.push(`<span class="chip">${esc(m.request_client_label || '—')}</span>`);
+  chips.push(`<span class="chip mono">${esc(shortId(id))}</span>`);
+
+  el.innerHTML = `
+    <div class="row-head">
+      <span class="rail"></span>
+      <div class="row-main">
+        ${promptHtml}
+        <div class="chips">${chips.join('')}<span class="ago" data-fs="${rec.firstSeen}">${fmtAgo(Date.now() - rec.firstSeen)}</span></div>
+      </div>
+      <span class="caret">▶</span>
+    </div>
+    <div class="detail">${buildDetail(m, id, rec.firstSeen)}</div>`;
+
+  el.querySelector('.row-head').addEventListener('click', () => el.classList.toggle('open'));
+  return el;
+}
+
+function buildDetail(m, id, firstSeen) {
+  const kv = (k, v, cls) => `<div class="dkv${cls ? ' ' + cls : ''}"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+  let core = '<div class="dgrid">'
+    + kv('full request id', `<span style="font-family:ui-monospace,Menlo,monospace;font-size:11px">${esc(id)}</span>`, 'full')
+    + kv('model', esc(m.request_model || '—'), 'full')
+    + kv('client', esc(m.request_client_label || '—'))
+    + kv('first seen', clock(new Date(firstSeen)))
+    + kv('prompt tokens', fmtInt(m.prompt_tokens))
+    + kv('completion tokens', fmtInt(m.completion_tokens))
+    + kv('decode tok/s', fmt(m.decode_tok_s, 1))
+    + kv('ttft', fmtSec(m.ttft_s))
+    + kv('request elapsed', fmtSec(m.request_elapsed_s))
+    + kv('message count', fmtInt(m.request_message_count))
+    + kv('tool calls made', fmtInt(m.tool_call_count || 0))
+    + kv('tools available', fmtInt((m.request_tool_names || []).length))
+    + kv('reasoning mode', esc(m.request_reasoning_mode || '—'))
+    + kv('thinking enabled', m.request_enable_thinking === true ? 'yes' : 'no')
+    + '</div>';
+
+  /* accept-by-depth */
+  const acc = m.accepted_by_depth || [], drf = m.drafted_by_depth || [];
+  let depth = '';
+  if (drf.length) {
+    let bars = '';
+    for (let i = 0; i < Math.max(acc.length, drf.length); i++) {
+      const a = acc[i] || 0, d = drf[i] || 0, r = d > 0 ? a / d : 0;
+      bars += `<div class="dbar-row"><span class="lbl">Depth ${i + 1}</span>`
+        + `<span class="dbar-track"><i style="width:${(r * 100).toFixed(1)}%"></i></span>`
+        + `<span class="pv">${fmtInt(a)}/${fmtInt(d)} · ${fmt(r * 100, 0)}%</span></div>`;
+    }
+    depth = `<div class="dsection"><h4>Speculative acceptance by depth</h4><div class="depthbars">${bars}</div></div>`;
+  }
+
+  /* roles */
+  const roles = m.request_message_roles || [];
+  let rolesHtml = '';
+  if (roles.length) {
+    rolesHtml = `<div class="dsection"><h4>Conversation roles (${roles.length})</h4><div class="roles">`
+      + roles.map(r => `<span class="rtok ${['system','user','assistant','tool'].includes(r) ? r : 'system'}">${esc(r)}</span>`).join('')
+      + '</div></div>';
+  }
+
+  /* tool names — highlight is not available (which were used isn't in data), just list availability */
+  const tools = m.request_tool_names || [];
+  let toolsHtml = '';
+  if (tools.length) {
+    toolsHtml = `<div class="dsection"><h4>Tools available (${tools.length}) · model made ${m.tool_call_count || 0} call${(m.tool_call_count||0) === 1 ? '' : 's'}</h4><div class="toolnames">`
+      + tools.map(t => `<span class="tn">${esc(t)}</span>`).join('')
+      + '</div></div>';
+  }
+
+  return `<div class="detail-inner">${core}${depth}${rolesHtml}${toolsHtml}</div>`;
+}
+
+/* ingest a metrics payload: register any unseen request_ids (oldest→newest) */
+function ingest(recent) {
+  let added = 0;
+  const now = Date.now();
+  (recent || []).forEach(m => {
+    const id = m.request_id;
+    if (!id) return;
+    if (seen.has(id)) { seen.get(id).data = m; return; }  // refresh fields
+    seen.set(id, { firstSeen: now, data: m });
+    order.unshift(id);                                     // newest to front
+    added++;
+    lastArrivalAt = now;
+  });
+  /* trim buffer */
+  while (order.length > BUFFER) {
+    const drop = order.pop();
+    seen.delete(drop);
+    const node = $('feed').querySelector(`.row[data-id="${CSS.escape(drop)}"]`);
+    if (node) node.remove();
+  }
+  return added;
+}
+
+function render() {
+  const feed = $('feed');
+  const empty = $('empty');
+  if (order.length && empty) empty.remove();
+
+  /* prepend rows not yet in DOM (order[] is newest-first; insert so DOM matches) */
+  order.forEach((id, idx) => {
+    let node = feed.querySelector(`.row[data-id="${CSS.escape(id)}"]`);
+    if (!node) {
+      node = buildRow(id);
+      node.classList.add('fresh');
+      const ref = feed.children[idx] || null;
+      feed.insertBefore(node, ref);
+      setTimeout(() => node.classList.remove('fresh'), 6000);
+    }
+  });
+  $('count').textContent = String(order.length);
+}
+
+function tickAges() {
+  document.querySelectorAll('.ago[data-fs]').forEach(el => {
+    el.textContent = fmtAgo(Date.now() - Number(el.dataset.fs));
+  });
+}
+
+function renderStatus() {
+  const dot = $('status-dot'), txt = $('status-text');
+  const now = Date.now();
+  if (!connected) { dot.className = 'dot offline'; txt.textContent = 'offline'; }
+  else if (lastArrivalAt && now - lastArrivalAt < ACTIVE_WINDOW) { dot.className = 'dot active'; txt.textContent = 'active'; }
+  else { dot.className = 'dot'; txt.textContent = 'idle'; }
+}
+
+function fetchTimeout(url, ms) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  return fetch(url, { signal: ctl.signal, cache: 'no-store' }).finally(() => clearTimeout(t));
+}
+
+async function poll() {
+  try {
+    const res = await fetchTimeout(API + '/metrics', 2500);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    ingest(data.recent);
+    render();
+    lastOkAt = Date.now();
+    if (!connected) { connected = true; document.body.classList.remove('disconnected'); }
+  } catch (err) {
+    if (connected || lastOkAt === null) {
+      connected = false;
+      document.body.classList.add('disconnected');
+      $('banner-time').textContent = lastOkAt ? clock(new Date(lastOkAt)) : '(no data yet)';
+    }
+    if (lastOkAt === null) document.body.classList.add('disconnected');
+  }
+  renderStatus();
+}
+
+$('f-ring').textContent = String(BUFFER);
+poll();
+setInterval(poll, POLL);
+setInterval(() => { tickAges(); renderStatus(); }, 1000);
+</script>
+</body>
+</html>

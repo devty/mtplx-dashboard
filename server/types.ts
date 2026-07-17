@@ -34,6 +34,12 @@ export interface MetricsRecord {
   verify_eval_time_s?: number | null;
   accept_time_s?: number | null;
   request_last_user_preview?: string | null;
+  request_last_user_chars?: number | null;
+  /** Full prompt + response transcript. Only present when MTPLX is patched and
+   *  run with MTPLX_DASHBOARD_CAPTURE_BODIES=1 (see patches/). Undefined on a
+   *  stock server, which the detail page renders as a preview-only fallback. */
+  request_messages_full?: { role: string; content: string }[];
+  response_text?: string | null;
   request_message_roles?: string[];
   request_tool_names?: string[];
   tool_call_count?: number | null;

@@ -42,8 +42,25 @@ One row per completed request, newest first:
   tool-calls made · acceptance % · reasoning/thinking flag · client · short request id · live "Ns ago"
 - **Click any row** to expand a full detail drawer: every timing/token field, per-depth
   acceptance bars, the conversation role sequence, and available tools.
+- **Open full detail page ↗** (link at the bottom of any drawer) jumps to `public/detail.html`.
 
-The two pages cross-link via a header nav.
+### `public/detail.html` — Single-request detail
+A standalone, linkable view of one request (`detail.html?id=<request_id>`), built off the same
+SSE payload. Reachable from the drawer permalink in the log. Shows the prompt preview plus every
+metrics field grouped into cards — overview, tokens/throughput, latency & verify-time breakdown,
+context & cache, speculative acceptance (with mean accept probability) by depth, and conversation
+shape. An id that has scrolled out of the server's rolling log buffer shows a clear "not in the
+buffer" state rather than a blank page.
+
+By default it shows metadata only — stock `/metrics` carries a 180-char preview of the last user
+message and **no response body** — so it renders the preview with an honest "showing 180 of N
+chars" indicator (see Limitations). If you run a body-capture-enabled MTPLX (apply
+[`patches/mtplx-full-transcript-capture.patch`](./patches/README.md) and set
+`MTPLX_DASHBOARD_CAPTURE_BODIES=1`), the record also carries `request_messages_full` +
+`response_text`, and the page adds **Full prompt** (per-message transcript) and **Response** cards.
+These fields are optional — the page degrades gracefully to the preview when they're absent.
+
+The pages cross-link via a header nav.
 
 ---
 
@@ -137,12 +154,14 @@ as-is by `express.static`. Only `server/**/*.ts` goes through TypeScript.
 ## Limitations (by design — it reads `/metrics`, nothing more)
 
 - **Completed requests only.** A long generation appears when it *finishes*, not mid-flight.
-- **Prompt is a server-truncated preview**, and there is **no assistant response body** in
-  `/metrics` — this is a live pulse, not a full trace store.
+- **Prompt is a server-truncated preview** (180 chars of the last user message), and there is
+  **no assistant response body** in stock `/metrics` — this is a live pulse, not a full trace store.
+  The single-request detail page can show the full prompt + response *if* you run a patched MTPLX
+  with body capture enabled — see [`patches/`](./patches/README.md). Off by default; opt-in only.
 - **Caller attribution is approximate.** OpenAI-compatible clients report the same
   `client_label`, so multiple apps hitting one server aren't cleanly distinguished.
-- For full prompt/response bodies and tool-call arguments, you'd put a logging proxy in front
-  of the server — out of scope here.
+- For full prompt/response bodies, patch MTPLX for opt-in body capture ([`patches/`](./patches/README.md))
+  or put a logging proxy in front of the server. Tool-call *arguments* still aren't captured either way.
 
 ---
 

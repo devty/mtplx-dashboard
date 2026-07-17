@@ -1,0 +1,98 @@
+diff --git a/mtplx/server/openai.py b/mtplx/server/openai.py
+index 02b815a..b5c073d 100644
+--- a/mtplx/server/openai.py
++++ b/mtplx/server/openai.py
+@@ -13173,6 +13173,54 @@ def _record_stream_cancellation_metric(
+         pass
+ 
+ 
++def _dashboard_capture_bodies_enabled() -> bool:
++    """Opt-in switch for storing full prompt/response text on metrics records.
++
++    Off by default: full bodies are large and privacy-sensitive, and /metrics
++    is unauthenticated on localhost. Enable with MTPLX_DASHBOARD_CAPTURE_BODIES=1
++    when a trusted local dashboard wants complete per-request transcripts.
++    """
++
++    return os.environ.get("MTPLX_DASHBOARD_CAPTURE_BODIES", "").strip().lower() in {
++        "1",
++        "true",
++        "yes",
++        "on",
++    }
++
++
++def _dashboard_body_max_chars() -> int:
++    """Per-field cap for captured bodies (default 20k chars). 0 disables the cap."""
++
++    try:
++        value = int(os.environ.get("MTPLX_DASHBOARD_BODY_MAX_CHARS", "20000"))
++    except ValueError:
++        return 20000
++    return max(0, value)
++
++
++def _clip_body(text: str) -> str:
++    limit = _dashboard_body_max_chars()
++    return text if limit <= 0 else text[:limit]
++
++
++def _dashboard_capture_response_text(state: "ServerState", text: str | None) -> None:
++    """Best-effort: stamp the finished response text onto the latest record.
++
++    No-ops unless capture is enabled. Deliberately tolerant — a capture glitch
++    must never break a user-visible response — so all failures are swallowed.
++    """
++
++    if not _dashboard_capture_bodies_enabled():
++        return
++    if not getattr(state, "last_metrics", None):
++        return
++    try:
++        state.last_metrics[-1]["response_text"] = _clip_body(str(text or ""))
++    except BaseException:
++        pass
++
++
+ def _request_observability(
+     request: ChatCompletionRequest,
+     *,
+@@ -13238,6 +13286,22 @@ def _request_observability(
+         "request_depth": int(request_depth),
+         "request_last_user_preview": user_texts[-1][:180] if user_texts else None,
+         "request_last_user_chars": len(user_texts[-1]) if user_texts else 0,
++        # Full prompt transcript, opt-in (see _dashboard_capture_bodies_enabled).
++        # Merged into every completion envelope via envelope.update(observability),
++        # so a single site here covers streaming, AR-batch, and smart-fan paths.
++        **(
++            {
++                "request_messages_full": [
++                    {
++                        "role": message.role,
++                        "content": _clip_body(_content_to_text(message.content)),
++                    }
++                    for message in request.messages
++                ]
++            }
++            if _dashboard_capture_bodies_enabled()
++            else {}
++        ),
+     }
+ 
+ 
+@@ -14974,6 +15038,7 @@ def _finalize_batched_ar_generation(
+     state.last_request_at = time.time()
+     state.requests_completed += 1
+     _dashboard_record_completion(state, envelope=envelope, stats=stats)
++    _dashboard_capture_response_text(state, generated.get("text"))
+     generated["stats"] = _json_safe(stats)
+     generated["completion_tokens"] = completion_tokens
+     generated["tok_s"] = stats.get("decode_tok_s") or generated.get("tok_s") or 0.0
+@@ -15716,6 +15781,7 @@ def _run_generation(
+         state.last_request_at = time.time()
+         state.requests_completed += 1
+         _dashboard_record_completion(state, envelope=envelope, stats=stats)
++        _dashboard_capture_response_text(state, getattr(out, "text", None))
+         last = {
+             "text": out.text,
+             "tokens": out.tokens,

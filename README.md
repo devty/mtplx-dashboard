@@ -42,8 +42,18 @@ One row per completed request, newest first:
   tool-calls made · acceptance % · reasoning/thinking flag · client · short request id · live "Ns ago"
 - **Click any row** to expand a full detail drawer: every timing/token field, per-depth
   acceptance bars, the conversation role sequence, and available tools.
+- **Open full detail page ↗** (link at the bottom of any drawer) jumps to `public/detail.html`.
 
-The two pages cross-link via a header nav.
+### `public/detail.html` — Single-request detail
+A standalone, linkable view of one request (`detail.html?id=<request_id>`), built off the same
+SSE payload. Reachable from the drawer permalink in the log. Shows the prompt preview plus every
+metrics field grouped into cards — overview, tokens/throughput, latency & verify-time breakdown,
+context & cache, speculative acceptance (with mean accept probability) by depth, and conversation
+shape. Because it reads the same `/metrics`-derived record, it shows metadata only — a truncated
+prompt preview and **no assistant response body** (see Limitations). An id that has scrolled out of
+the server's rolling log buffer shows a clear "not in the buffer" state rather than a blank page.
+
+The pages cross-link via a header nav.
 
 ---
 

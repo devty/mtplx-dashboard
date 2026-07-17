@@ -178,6 +178,8 @@ body.disconnected #feed { opacity: 0.55; }
 .dbar-track { flex: 1; height: 12px; border-radius: 4px; background: var(--blue-track); overflow: hidden; }
 .dbar-track i { display: block; height: 100%; background: var(--s1); border-radius: 4px; }
 .dbar-row .pv { font-variant-numeric: tabular-nums; font-weight: 550; width: 84px; text-align: right; color: var(--ink); }
+.detail-link { display: inline-flex; align-items: center; font-size: 12px; font-weight: 600; color: var(--s1); text-decoration: none; }
+.detail-link:hover { text-decoration: underline; }
 
 .empty-state { text-align: center; color: var(--muted); font-size: 13px; padding: 48px 0; }
 footer { margin-top: 22px; font-size: 11.5px; color: var(--muted); text-align: center; }
@@ -368,7 +370,9 @@ function buildDetail(m, id, firstSeen) {
       + '</div></div>';
   }
 
-  return `<div class="detail-inner">${core}${depth}${rolesHtml}${toolsHtml}</div>`;
+  const permalink = `<div class="dsection"><a class="detail-link" href="detail.html?id=${encodeURIComponent(id)}">Open full detail page ↗</a></div>`;
+
+  return `<div class="detail-inner">${core}${depth}${rolesHtml}${toolsHtml}${permalink}</div>`;
 }
 
 /* Consume the server's already-deduped, already-trimmed { order, entries }

@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230b0e14'/%3E%3Cpath d='M55 10 28 56h18l-5 34 31-48H52z' fill='%233b82f6'/%3E%3C/svg%3E">
+<title>MTPLX — request detail</title>
+<style>
+/* ---------------------------------------------------------------- tokens (shared with dashboard / log) */
+:root {
+  --page:        #f9f9f7;
+  --surface:     #fcfcfb;
+  --ink:         #0b0b0b;
+  --ink-2:       #52514e;
+  --muted:       #898781;
+  --grid:        #e1e0d9;
+  --baseline:    #c3c2b7;
+  --border:      rgba(11,11,11,0.10);
+
+  --s1: #2a78d6;  /* blue   */
+  --s2: #1baf7a;  /* aqua   */
+  --s3: #eda100;  /* yellow */
+  --s4: #008300;  /* green  */
+
+  --blue-track:  #b7d3f6;
+  --blue-wash:   rgba(42,120,214,0.10);
+
+  --good:        #0ca30c;
+  --good-text:   #006300;
+  --warning:     #fab219;
+  --critical:    #d03b3b;
+
+  --shadow: 0 1px 2px rgba(11,11,11,0.04), 0 4px 14px rgba(11,11,11,0.05);
+  --chip-bg: rgba(11,11,11,0.035);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page:        #0d0d0d;
+    --surface:     #1a1a19;
+    --ink:         #ffffff;
+    --ink-2:       #c3c2b7;
+    --muted:       #898781;
+    --grid:        #2c2c2a;
+    --baseline:    #383835;
+    --border:      rgba(255,255,255,0.10);
+
+    --s1: #3987e5;
+    --s2: #199e70;
+    --s3: #c98500;
+    --s4: #008300;
+
+    --blue-track:  #0d366b;
+    --blue-wash:   rgba(57,135,229,0.12);
+
+    --good:        #0ca30c;
+    --good-text:   #0ca30c;
+
+    --shadow: 0 1px 2px rgba(0,0,0,0.30), 0 4px 14px rgba(0,0,0,0.25);
+    --chip-bg: rgba(255,255,255,0.05);
+  }
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--page);
+  color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 960px; margin: 0 auto; padding: 20px 24px 48px; }
+
+/* ---------------------------------------------------------------- header */
+header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; padding: 6px 2px 14px; }
+.brand { font-size: 19px; font-weight: 700; letter-spacing: 0.04em; }
+.brand small { font-weight: 400; color: var(--ink-2); letter-spacing: 0; margin-left: 10px; font-size: 13px; }
+.nav { display: flex; gap: 4px; margin-left: 4px; }
+.nav a {
+  font-size: 12.5px; color: var(--ink-2); text-decoration: none;
+  padding: 4px 11px; border-radius: 7px; border: 1px solid transparent;
+}
+.nav a:hover { color: var(--ink); background: var(--chip-bg); }
+.nav a.active { color: var(--ink); border-color: var(--border); background: var(--surface); font-weight: 600; }
+.head-right { margin-left: auto; display: flex; align-items: center; gap: 14px; font-size: 12.5px; color: var(--ink-2); }
+.status-pill { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: var(--ink); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.active { background: var(--good); animation: pulse 1.6s ease-out infinite; }
+.dot.offline { background: var(--critical); }
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(12,163,12,0.45); }
+  70%  { box-shadow: 0 0 0 7px rgba(12,163,12,0); }
+  100% { box-shadow: 0 0 0 0 rgba(12,163,12,0); }
+}
+
+.back { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); text-decoration: none; margin-bottom: 12px; }
+.back:hover { color: var(--ink); }
+
+#banner {
+  display: none; margin: 0 0 14px; padding: 10px 14px;
+  border: 1px solid var(--critical); border-radius: 10px;
+  background: color-mix(in srgb, var(--critical) 8%, var(--surface));
+  color: var(--ink); font-size: 13px;
+}
+#banner b { color: var(--critical); }
+
+/* ---------------------------------------------------------------- prompt hero */
+.hero {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow); padding: 18px 20px; margin-bottom: 16px;
+}
+.hero .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.hero .prompt { font-size: 16px; line-height: 1.5; color: var(--ink); font-weight: 500; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hero .prompt.empty { color: var(--muted); font-style: italic; font-weight: 400; }
+.hero .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 13px; align-items: center; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; color: var(--ink-2); background: var(--chip-bg);
+  border-radius: 6px; padding: 2px 8px; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.chip b { color: var(--ink); font-weight: 600; }
+.chip .ic { color: var(--muted); font-weight: 600; font-size: 10.5px; letter-spacing: 0.03em; text-transform: uppercase; }
+.chip.accent { color: var(--s1); background: var(--blue-wash); }
+.chip.accent b { color: var(--s1); }
+.chip.think { color: var(--good-text); background: color-mix(in srgb, var(--good) 9%, transparent); }
+.chip.tool  { color: var(--s3); background: color-mix(in srgb, var(--s3) 12%, transparent); }
+.chip.tool b { color: var(--s3); }
+.chip.mono { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+
+/* ---------------------------------------------------------------- unavailable note */
+.note {
+  font-size: 12px; color: var(--ink-2);
+  background: var(--surface); border: 1px dashed var(--border); border-radius: 10px;
+  padding: 9px 14px; margin-bottom: 16px; line-height: 1.5;
+}
+.note b { color: var(--ink); font-weight: 600; }
+
+/* ---------------------------------------------------------------- sections */
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 680px) { .cards { grid-template-columns: 1fr; } }
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow); padding: 15px 17px;
+}
+.card.wide { grid-column: 1 / -1; }
+.card h4 { font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin-bottom: 11px; }
+
+.dkv { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; padding: 5px 0; border-bottom: 1px solid var(--grid); min-width: 0; }
+.dkv:last-child { border-bottom: 0; }
+.dkv .k { color: var(--ink-2); flex: none; }
+.dkv .v { font-variant-numeric: tabular-nums; font-weight: 550; text-align: right; min-width: 0; overflow-wrap: anywhere; }
+.mono { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+
+.badge { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 5px; background: var(--chip-bg); color: var(--ink-2); }
+.badge.ok  { background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good-text); }
+.badge.bad { background: color-mix(in srgb, var(--critical) 14%, transparent); color: var(--critical); }
+
+/* verify-time / cache strips */
+.strip { display: flex; height: 14px; border-radius: 5px; overflow: hidden; background: var(--blue-track); margin-bottom: 11px; }
+.strip i { display: block; height: 100%; }
+.brow { display: flex; align-items: center; gap: 9px; font-size: 12px; padding: 3px 0; }
+.brow .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.brow .name { color: var(--ink-2); flex: 1; min-width: 0; }
+.brow .val { font-variant-numeric: tabular-nums; font-weight: 550; }
+.brow .pct { font-variant-numeric: tabular-nums; color: var(--muted); width: 48px; text-align: right; }
+.mini-note { font-size: 12px; color: var(--muted); }
+
+/* depth bars */
+.depthbars { display: flex; flex-direction: column; gap: 6px; }
+.dbar-row { display: flex; align-items: center; gap: 9px; font-size: 11.5px; }
+.dbar-row .lbl { color: var(--ink-2); width: 52px; flex: none; }
+.dbar-track { flex: 1; height: 12px; border-radius: 4px; background: var(--blue-track); overflow: hidden; }
+.dbar-track i { display: block; height: 100%; background: var(--s1); border-radius: 4px; }
+.dbar-row .pv { font-variant-numeric: tabular-nums; font-weight: 550; width: 110px; text-align: right; color: var(--ink); }
+
+/* roles / tools */
+.roles { display: flex; flex-wrap: wrap; gap: 3px; }
+.rtok { font-size: 10.5px; padding: 1px 6px; border-radius: 4px; font-variant-numeric: tabular-nums; }
+.rtok.system    { background: var(--chip-bg); color: var(--muted); }
+.rtok.user      { background: var(--blue-wash); color: var(--s1); font-weight: 600; }
+.rtok.assistant { background: color-mix(in srgb, var(--s2) 14%, transparent); color: var(--s2); }
+.rtok.tool      { background: color-mix(in srgb, var(--s3) 14%, transparent); color: var(--s3); }
+.toolnames { display: flex; flex-wrap: wrap; gap: 4px; }
+.tn { font-size: 10.5px; font-family: ui-monospace, Menlo, monospace; color: var(--ink-2); background: var(--chip-bg); border-radius: 4px; padding: 1px 6px; }
+
+.state-msg { text-align: center; color: var(--muted); font-size: 13.5px; padding: 60px 20px; line-height: 1.6; }
+.state-msg b { color: var(--ink); font-weight: 600; }
+.state-msg a { color: var(--s1); }
+
+footer { margin-top: 22px; font-size: 11.5px; color: var(--muted); text-align: center; }
+footer code { font: 11px ui-monospace, Menlo, monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">MTPLX<small>request detail</small></div>
+    <nav class="nav">
+      <a href="index.html">Dashboard</a>
+      <a href="log.html">Live log</a>
+    </nav>
+    <div class="head-right">
+      <span class="status-pill"><span class="dot" id="status-dot"></span><span id="status-text">connecting</span></span>
+    </div>
+  </header>
+
+  <a class="back" href="log.html">← back to live log</a>
+
+  <div id="banner"><b>Connection lost.</b> The dashboard server can't reach MTPLX — showing the last data seen. Retrying automatically…</div>
+
+  <div id="content">
+    <div class="state-msg" id="state">Loading request…</div>
+  </div>
+
+  <footer>server-side poll of MTPLX <code>/metrics</code> · pushed live over SSE · one completed request · <a href="log.html" style="color:var(--muted)">back to log</a></footer>
+</div>
+
+<script>
+'use strict';
+/* Standalone per-request detail view. Reads ?id=<request_id> and pulls that
+   entry out of the same SSE { log.order, log.entries } payload the live log
+   uses (see server/metricsPoller.ts). Formatting helpers are intentionally
+   duplicated from log.html / index.html rather than shared — same convention
+   as the rest of the frontend. The record only lives while it's inside the
+   server's rolling log buffer, so an old id can 404 into the "not in buffer"
+   state below. */
+
+const params = new URLSearchParams(location.search);
+const targetId = params.get('id') || '';
+
+let connected = false;
+let entry = null; // { firstSeen, data }
+
+const $ = s => document.getElementById(s);
+const esc = s => (s == null ? '' : String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])));
+const sum = a => (a || []).reduce((x, y) => x + (y || 0), 0);
+
+function fmt(n, d = 1) {
+  if (n == null || Number.isNaN(n)) return '—';
+  return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function fmtInt(n) { return n == null || Number.isNaN(n) ? '—' : Math.round(n).toLocaleString('en-US'); }
+function fmtCompact(n) {
+  if (n == null || Number.isNaN(n)) return '—';
+  if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (Math.abs(n) >= 1e4) return (n / 1e3).toFixed(1) + 'K';
+  return fmtInt(n);
+}
+function fmtSec(s) {
+  if (s == null || Number.isNaN(s)) return '—';
+  if (s < 1) return fmt(s * 1000, 0) + ' ms';
+  return fmt(s, 2) + ' s';
+}
+function fmtAgo(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 3) return 'just now';
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's ago';
+  return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm ago';
+}
+const shortId = id => (id || '').replace(/^chatcmpl-/, '').slice(0, 8) || '—';
+const clock = d => d.toLocaleTimeString('en-US', { hour12: false });
+const stamp = d => d.toLocaleString('en-US', { hour12: false });
+
+function acceptPct(m) {
+  const d = sum(m.drafted_by_depth);
+  return d > 0 ? sum(m.accepted_by_depth) / d : null;
+}
+
+function kv(k, v, cls) {
+  return `<div class="dkv"><span class="k">${k}</span><span class="v${cls ? ' ' + cls : ''}">${v}</span></div>`;
+}
+
+/* ---- individual section builders ---- */
+function overviewCard(m, firstSeen) {
+  return `<div class="card wide"><h4>Overview</h4>
+    ${kv('request id', esc(targetId), 'mono')}
+    ${kv('session id', esc(m.session_id || '—'), 'mono')}
+    ${kv('model', esc(m.request_model || '—'))}
+    ${kv('client', esc(m.request_client_label || '—'))}
+    ${kv('first seen', firstSeen ? stamp(new Date(firstSeen)) : '—')}
+    ${kv('reasoning mode', esc(m.request_reasoning_mode || '—'))}
+    ${kv('thinking enabled', m.request_enable_thinking === true ? 'yes' : m.request_enable_thinking === false ? 'no' : '—')}
+    ${kv('message count', fmtInt(m.request_message_count))}
+  </div>`;
+}
+
+function tokensCard(m) {
+  const ap = acceptPct(m);
+  return `<div class="card"><h4>Tokens &amp; throughput</h4>
+    ${kv('prompt tokens', fmtInt(m.prompt_tokens))}
+    ${kv('completion tokens', fmtInt(m.completion_tokens))}
+    ${kv('decode tok/s', fmt(m.display_decode_tok_s ?? m.decode_tok_s, 1))}
+    ${kv('prefill tok/s', fmt(m.prefill_tok_s ?? m.prompt_tps, 1))}
+    ${kv('bonus tokens', fmtInt(m.bonus_tokens))}
+    ${kv('correction tokens', fmtInt(m.correction_tokens))}
+    ${kv('verify calls', fmtInt(m.verify_calls))}
+    ${kv('MTP depth', m.mtp_depth != null ? String(m.mtp_depth) : '—')}
+    ${kv('overall acceptance', ap != null ? fmt(ap * 100, 0) + '%' : '—')}
+  </div>`;
+}
+
+function latencyCard(m) {
+  const parts = [
+    ['Draft (MTP heads)',   m.draft_time_s,          '--s1'],
+    ['Verify forward',      m.verify_forward_time_s, '--s2'],
+    ['Verify eval',         m.verify_eval_time_s,    '--s3'],
+    ['Accept / commit',     m.accept_time_s,         '--s4'],
+  ].filter(p => p[1] != null && p[1] > 0);
+  const total = parts.reduce((a, p) => a + p[1], 0);
+
+  let breakdown;
+  if (!total) {
+    breakdown = '<div class="mini-note">no verify-time breakdown in this record</div>';
+  } else {
+    breakdown =
+      `<div class="strip">${parts.map(([name, t, c]) =>
+        `<i style="flex-grow:${t};background:var(${c})" title="${name}: ${fmtSec(t)}"></i>`).join('')}</div>` +
+      parts.map(([name, t, c]) =>
+        `<div class="brow"><span class="swatch" style="background:var(${c})"></span>` +
+        `<span class="name">${name}</span><span class="val">${fmtSec(t)}</span>` +
+        `<span class="pct">${fmt(t / total * 100, 1)}%</span></div>`).join('');
+  }
+
+  return `<div class="card"><h4>Latency</h4>
+    ${kv('ttft', fmtSec(m.ttft_s))}
+    ${kv('request elapsed', fmtSec(m.request_elapsed_s))}
+    ${kv('decode elapsed', fmtSec(m.decode_elapsed_s))}
+    <div style="margin-top:12px">${breakdown}</div>
+  </div>`;
+}
+
+function contextCard(m) {
+  const used = m.context_len ?? ((m.prompt_tokens || 0) + (m.completion_tokens || 0));
+  const src = m.cache_source ? m.cache_source.toUpperCase() + ' cache' : '—';
+  const hit = m.session_cache_hit;
+  const hitBadge = hit === true ? '<span class="badge ok">session hit</span>'
+    : hit === false ? '<span class="badge bad">session miss</span>' : '—';
+  return `<div class="card"><h4>Context &amp; cache</h4>
+    ${kv('context length', fmtInt(used))}
+    ${kv('cached tokens', fmtInt(m.cached_tokens))}
+    ${kv('fresh prefill', fmtInt(m.new_prefill_tokens))}
+    ${kv('cache source', esc(src))}
+    ${kv('session cache', hitBadge)}
+    ${kv('cache restore', fmtSec(m.cache_restore_time_s))}
+    ${kv('SSD cache hit', m.ssd_cache_hit === true ? 'yes' : m.ssd_cache_hit === false ? 'no' : '—')}
+    ${kv('SSD cached tokens', fmtInt(m.ssd_cached_tokens))}
+  </div>`;
+}
+
+function depthCard(m) {
+  const acc = m.accepted_by_depth || [], drf = m.drafted_by_depth || [], prob = m.mean_accept_probability_by_depth || [];
+  const n = Math.max(acc.length, drf.length, prob.length);
+  if (!n) return '';
+  let bars = '';
+  for (let i = 0; i < n; i++) {
+    const a = acc[i] || 0, d = drf[i] || 0, r = d > 0 ? a / d : 0;
+    const p = prob[i];
+    bars += `<div class="dbar-row"><span class="lbl">Depth ${i + 1}</span>`
+      + `<span class="dbar-track"><i style="width:${(r * 100).toFixed(1)}%"></i></span>`
+      + `<span class="pv">${fmtInt(a)}/${fmtInt(d)} · ${fmt(r * 100, 0)}%`
+      + (p != null ? ` · p̄ ${fmt(p * 100, 0)}%` : '')
+      + `</span></div>`;
+  }
+  return `<div class="card wide"><h4>Speculative acceptance by depth</h4><div class="depthbars">${bars}</div></div>`;
+}
+
+function rolesCard(m) {
+  const roles = m.request_message_roles || [];
+  const tools = m.request_tool_names || [];
+  if (!roles.length && !tools.length) return '';
+  let inner = '';
+  if (roles.length) {
+    inner += `<div style="margin-bottom:${tools.length ? '14px' : '0'}"><div class="mini-note" style="margin-bottom:7px">Conversation roles (${roles.length})</div><div class="roles">`
+      + roles.map(r => `<span class="rtok ${['system','user','assistant','tool'].includes(r) ? r : 'system'}">${esc(r)}</span>`).join('')
+      + '</div></div>';
+  }
+  if (tools.length) {
+    inner += `<div><div class="mini-note" style="margin-bottom:7px">Tools available (${tools.length}) · model made ${m.tool_call_count || 0} call${(m.tool_call_count || 0) === 1 ? '' : 's'}</div><div class="toolnames">`
+      + tools.map(t => `<span class="tn">${esc(t)}</span>`).join('')
+      + '</div></div>';
+  }
+  return `<div class="card wide"><h4>Conversation shape</h4>${inner}</div>`;
+}
+
+/* ---- top-level render ---- */
+function renderDetail() {
+  const content = $('content');
+
+  if (!targetId) {
+    content.innerHTML = `<div class="state-msg"><b>No request selected.</b><br>Open this page from a row on the <a href="log.html">live log</a>.</div>`;
+    return;
+  }
+  if (!entry) {
+    const lost = connected
+      ? `<b>Request not in the buffer.</b><br>Either it hasn't been seen yet, or it has scrolled out of the server's rolling log window.<br><span class="mono">${esc(targetId)}</span><br><a href="log.html">← back to live log</a>`
+      : `Loading request…<br><span class="mono">${esc(targetId)}</span>`;
+    content.innerHTML = `<div class="state-msg">${lost}</div>`;
+    return;
+  }
+
+  const m = entry.data;
+  const preview = (m.request_last_user_preview || '').trim();
+  const ap = acceptPct(m);
+  const toolMade = m.tool_call_count || 0;
+  const thinking = m.request_enable_thinking === true;
+  const reason = m.request_reasoning_mode;
+
+  const chips = [];
+  chips.push(`<span class="chip"><span class="ic">tok</span><b>${fmtCompact(m.prompt_tokens)}</b>→<b>${fmtInt(m.completion_tokens)}</b></span>`);
+  chips.push(`<span class="chip accent"><b>${fmt(m.display_decode_tok_s ?? m.decode_tok_s, 1)}</b> tok/s</span>`);
+  chips.push(`<span class="chip"><span class="ic">ttft</span><b>${fmtSec(m.ttft_s)}</b></span>`);
+  chips.push(`<span class="chip"><span class="ic">took</span><b>${fmtSec(m.request_elapsed_s)}</b></span>`);
+  if (toolMade > 0) chips.push(`<span class="chip tool"><b>${toolMade}</b> tool ${toolMade === 1 ? 'call' : 'calls'}</span>`);
+  if (ap != null) chips.push(`<span class="chip"><span class="ic">accept</span><b>${fmt(ap * 100, 0)}%</b></span>`);
+  if (thinking) chips.push(`<span class="chip think">thinking${reason && reason !== 'auto' ? ' · ' + esc(reason) : ''}</span>`);
+  chips.push(`<span class="chip">${esc(m.request_client_label || '—')}</span>`);
+  chips.push(`<span class="chip mono">${esc(shortId(targetId))}</span>`);
+  if (entry.firstSeen) chips.push(`<span class="chip" data-fs="${entry.firstSeen}">${fmtAgo(Date.now() - entry.firstSeen)}</span>`);
+
+  const promptHtml = preview
+    ? `<div class="prompt">${esc(preview)}</div>`
+    : `<div class="prompt empty">no user text in preview</div>`;
+
+  content.innerHTML = `
+    <div class="hero">
+      <div class="eyebrow">last user message · truncated preview</div>
+      ${promptHtml}
+      <div class="chips">${chips.join('')}</div>
+    </div>
+    <div class="note">
+      <b>Metadata only.</b> MTPLX's <span class="mono">/metrics</span> exposes a truncated preview of the last
+      user message and no assistant response body — the full prompt and the model's reply aren't available to this
+      dashboard. Everything below is derived from the per-request metrics record.
+    </div>
+    <div class="cards">
+      ${overviewCard(m, entry.firstSeen)}
+      ${tokensCard(m)}
+      ${latencyCard(m)}
+      ${contextCard(m)}
+      ${depthCard(m)}
+      ${rolesCard(m)}
+    </div>`;
+}
+
+function renderStatus() {
+  const dot = $('status-dot'), txt = $('status-text');
+  if (!connected) { dot.className = 'dot offline'; txt.textContent = 'offline'; }
+  else { dot.className = 'dot active'; txt.textContent = 'live'; }
+}
+
+function tickAges() {
+  document.querySelectorAll('[data-fs]').forEach(el => {
+    el.textContent = fmtAgo(Date.now() - Number(el.dataset.fs));
+  });
+}
+
+/* ================================================================= live data (SSE) */
+function applyPayload(p) {
+  connected = p.connected;
+
+  if (p.log && p.log.entries && targetId && p.log.entries[targetId]) {
+    entry = p.log.entries[targetId];
+  }
+
+  if (!connected) {
+    document.body.classList.add('disconnected');
+    $('banner').style.display = 'block';
+  } else {
+    document.body.classList.remove('disconnected');
+    $('banner').style.display = 'none';
+  }
+
+  renderDetail();
+  renderStatus();
+}
+
+const es = new EventSource('/api/events');
+es.addEventListener('snapshot', e => applyPayload(JSON.parse(e.data)));
+es.addEventListener('tick',     e => applyPayload(JSON.parse(e.data)));
+es.onerror = () => {
+  connected = false;
+  document.body.classList.add('disconnected');
+  $('banner').style.display = 'block';
+  renderStatus();
+  /* native EventSource auto-reconnect; the fresh snapshot on reconnect clears this */
+};
+
+renderDetail();
+renderStatus();
+setInterval(tickAges, 1000);
+</script>
+</body>
+</html>

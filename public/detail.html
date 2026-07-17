@@ -183,6 +183,21 @@ header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; paddi
 .toolnames { display: flex; flex-wrap: wrap; gap: 4px; }
 .tn { font-size: 10.5px; font-family: ui-monospace, Menlo, monospace; color: var(--ink-2); background: var(--chip-bg); border-radius: 4px; padding: 1px 6px; }
 
+/* full transcript (only when MTPLX is patched for body capture) */
+.msg { border: 1px solid var(--border); border-radius: 9px; margin-bottom: 8px; overflow: hidden; }
+.msg-head { display: flex; align-items: center; gap: 8px; padding: 6px 11px; background: var(--chip-bg); font-size: 11px; }
+.msg-role { font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.msg-role.system { color: var(--muted); }
+.msg-role.user { color: var(--s1); }
+.msg-role.assistant { color: var(--s2); }
+.msg-role.tool { color: var(--s3); }
+.msg-len { color: var(--muted); font-variant-numeric: tabular-nums; }
+.msg-body { padding: 10px 12px; font: 12.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
+.msg-body.empty { color: var(--muted); font-style: italic; }
+.response-body { padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--s2) 30%, var(--border)); border-radius: 9px; background: color-mix(in srgb, var(--s2) 5%, transparent); font: 13px/1.55 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
+.trunc-hint { font-size: 11px; color: var(--muted); margin-top: 8px; }
+.hero .trunc { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+
 .state-msg { text-align: center; color: var(--muted); font-size: 13.5px; padding: 60px 20px; line-height: 1.6; }
 .state-msg b { color: var(--ink); font-weight: 600; }
 .state-msg a { color: var(--s1); }
@@ -366,6 +381,32 @@ function depthCard(m) {
   return `<div class="card wide"><h4>Speculative acceptance by depth</h4><div class="depthbars">${bars}</div></div>`;
 }
 
+/* Full prompt transcript — only when MTPLX was patched + run with body capture
+   (see patches/). Undefined on a stock server, so this card is simply absent. */
+function fullPromptCard(m) {
+  const msgs = m.request_messages_full;
+  if (!Array.isArray(msgs) || !msgs.length) return '';
+  const rows = msgs.map(msg => {
+    const role = ['system', 'user', 'assistant', 'tool'].includes(msg.role) ? msg.role : 'system';
+    const content = (msg.content == null ? '' : String(msg.content));
+    const bodyCls = content.trim() ? '' : ' empty';
+    const body = content.trim() ? esc(content) : '(no text content)';
+    return `<div class="msg"><div class="msg-head"><span class="msg-role ${role}">${esc(msg.role)}</span>`
+      + `<span class="msg-len">${fmtInt(content.length)} chars</span></div>`
+      + `<div class="msg-body${bodyCls}">${body}</div></div>`;
+  }).join('');
+  return `<div class="card wide"><h4>Full prompt (${msgs.length} message${msgs.length === 1 ? '' : 's'})</h4>${rows}</div>`;
+}
+
+/* Full assistant response — only when body capture is enabled upstream. */
+function responseCard(m) {
+  if (m.response_text == null) return '';
+  const text = String(m.response_text);
+  const body = text.trim() ? esc(text) : '(empty response)';
+  return `<div class="card wide"><h4>Response · ${fmtInt(text.length)} chars</h4>`
+    + `<div class="response-body">${body}</div></div>`;
+}
+
 function rolesCard(m) {
   const roles = m.request_message_roles || [];
   const tools = m.request_tool_names || [];
@@ -419,22 +460,43 @@ function renderDetail() {
   chips.push(`<span class="chip mono">${esc(shortId(targetId))}</span>`);
   if (entry.firstSeen) chips.push(`<span class="chip" data-fs="${entry.firstSeen}">${fmtAgo(Date.now() - entry.firstSeen)}</span>`);
 
+  const hasFullPrompt = Array.isArray(m.request_messages_full) && m.request_messages_full.length > 0;
+  const hasResponse = m.response_text != null;
+  const hasBodies = hasFullPrompt || hasResponse;
+
+  /* Honest truncation: the preview is capped at 180 chars upstream; when we
+     don't have the full transcript, say how much of the message we're showing. */
+  const userChars = m.request_last_user_chars;
+  let truncHint = '';
+  if (!hasFullPrompt && preview && userChars != null && userChars > preview.length) {
+    truncHint = `<div class="trunc">showing first ${fmtInt(preview.length)} of ${fmtInt(userChars)} chars — enable body capture (see patches/) for the full prompt</div>`;
+  }
+
   const promptHtml = preview
     ? `<div class="prompt">${esc(preview)}</div>`
     : `<div class="prompt empty">no user text in preview</div>`;
 
+  const note = hasBodies
+    ? `<div class="note"><b>Full transcript captured.</b> This request carries the complete
+       ${hasFullPrompt ? 'prompt' : ''}${hasFullPrompt && hasResponse ? ' and ' : ''}${hasResponse ? 'response' : ''}
+       from a body-capture-enabled MTPLX (see <span class="mono">patches/</span>). Everything else below is
+       derived from the per-request metrics record.</div>`
+    : `<div class="note"><b>Metadata only.</b> Stock MTPLX <span class="mono">/metrics</span> exposes a
+       truncated preview of the last user message and no assistant response body. For the full prompt and the
+       model's reply, patch MTPLX for body capture (see <span class="mono">patches/</span>). Everything below is
+       derived from the per-request metrics record.</div>`;
+
   content.innerHTML = `
     <div class="hero">
-      <div class="eyebrow">last user message · truncated preview</div>
+      <div class="eyebrow">last user message${hasFullPrompt ? '' : ' · truncated preview'}</div>
       ${promptHtml}
+      ${truncHint}
       <div class="chips">${chips.join('')}</div>
     </div>
-    <div class="note">
-      <b>Metadata only.</b> MTPLX's <span class="mono">/metrics</span> exposes a truncated preview of the last
-      user message and no assistant response body — the full prompt and the model's reply aren't available to this
-      dashboard. Everything below is derived from the per-request metrics record.
-    </div>
+    ${note}
     <div class="cards">
+      ${fullPromptCard(m)}
+      ${responseCard(m)}
       ${overviewCard(m, entry.firstSeen)}
       ${tokensCard(m)}
       ${latencyCard(m)}

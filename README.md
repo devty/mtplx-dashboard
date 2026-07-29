@@ -67,7 +67,10 @@ The pages cross-link via a header nav.
 ## Quick start
 
 You need a running MTPLX server with its OpenAI-compatible endpoint (and `/metrics`) on
-`http://127.0.0.1:8000` — the default target this server polls.
+`http://127.0.0.1:8000` — the default target this server polls. Node `>=22.5` is required (see
+`engines` in `package.json`) because the SQLite persistence layer (below) uses the built-in
+`node:sqlite` module rather than a third-party driver — no extra dependency needed, but the
+version floor is firm.
 
 ```bash
 git clone https://github.com/devty/mtplx-dashboard.git
@@ -88,6 +91,10 @@ npm run build
 npm start
 ```
 
+`npm test` runs the `node:test` unit tests for the SQLite persistence layer (`server/db.ts`)
+against an in-memory database — there is no frontend test harness; verify page changes by loading
+them against a real MTPLX instead.
+
 ### Configuration
 
 The server polls a single, configured MTPLX target — set these as environment variables
@@ -103,6 +110,11 @@ The server polls a single, configured MTPLX target — set these as environment 
 | `RING_SIZE`         | `120`                     | Sparkline history depth (dashboard)                 |
 | `LOG_BUFFER_SIZE`   | `300`                     | Live-log rolling buffer depth                        |
 | `MAX_BACKOFF_MS`    | `10000`                   | Ceiling for poll-retry backoff when MTPLX is down    |
+| `DB_PATH`           | `data/history.db`         | SQLite history file. Relative paths resolve against the repo root. |
+| `PERSIST_ENABLED`   | `1`                       | `0` disables all persistence; the dashboard runs live-only. |
+| `RETENTION_DAYS`    | `30`                      | Rows older than this are pruned.                     |
+| `PRUNE_INTERVAL_MS` | `3600000`                 | How often the prune runs.                            |
+| `HEALTH_INTERVAL_MS`| `5000`                    | `/health` poll cadence; also drives the model chip.  |
 
 ```bash
 MTPLX_URL=http://box.local:8000 npm run dev
@@ -113,21 +125,29 @@ MTPLX_URL=http://box.local:8000 npm run dev
 ```
 mtplx-dashboard/
 ├── server/              TypeScript server — polls MTPLX, pushes SSE
-│   ├── server.ts          Express app: serves public/, /api/events (SSE), /api/metrics
-│   ├── metricsPoller.ts   Poll loop, retry/backoff, ring/log buffers, change detection
+│   ├── server.ts          Express app: serves public/, /api/events (SSE), /api/metrics,
+│   │                        /api/history/series, /api/history/gauges
+│   ├── metricsPoller.ts   Poll loop, retry/backoff, ring/log buffers, change detection,
+│   │                        request-row + tool-parse-gauge persistence
+│   ├── healthPoller.ts    Low-frequency /health loop — run detection, gauges, model chip
+│   ├── db.ts              SQLite persistence: schema, prepared statements, bucketed
+│   │                        range queries, pruning
+│   ├── db.test.ts         node:test unit tests for db.ts (npm test)
 │   ├── sse.ts             SSE client registry, broadcast, heartbeat
 │   ├── config.ts          Env var → config
 │   └── types.ts           Shared MetricsRecord / StatePayload shapes
 ├── public/              Static frontend — plain HTML/CSS/JS, no build step
-│   ├── index.html         Metrics dashboard
-│   └── log.html           Live activity log
+│   ├── index.html         Metrics dashboard (with live/1h/24h/7d history range selector)
+│   ├── log.html           Live activity log
+│   └── detail.html        Standalone single-request detail page
+├── data/                SQLite history file lives here by default (DB_PATH, gitignored)
 ├── docs/                README screenshots
-├── package.json         Scripts: dev / build / start / typecheck
+├── package.json         Scripts: dev / build / start / test / typecheck
 ├── tsconfig.json
 └── .env.example         Documents the env vars below (not auto-loaded)
 ```
 
-`npm run dev`/`npm start` compile nothing on their own from `public/` — those two files are served
+`npm run dev`/`npm start` compile nothing on their own from `public/` — those files are served
 as-is by `express.static`. Only `server/**/*.ts` goes through TypeScript.
 
 ---

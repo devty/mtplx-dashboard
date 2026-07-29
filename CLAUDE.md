@@ -170,8 +170,9 @@ showing "no data" rather than the whole page degrading.
   genuinely shared now — it lives once in `server/metricsPoller.ts` for both pages. Don't
   re-introduce per-page polling or duplicate that logic back into the HTML files.
 - Rendering/formatting code (formatters, `makeSpark`, CSS tokens) is still intentionally
-  duplicated between `public/index.html` and `public/log.html`, not factored into a shared file —
-  match that duplication rather than introducing a shared frontend module for it.
+  duplicated across `public/index.html`, `public/log.html`, `public/detail.html`, and
+  `public/history.html`, not factored into a shared file — match that duplication rather than
+  introducing a shared frontend module for it.
 - When adding a new metric field, mirror the existing pattern: add it to `MetricsRecord` in
   `server/types.ts` if it needs typed access, a `fmt*` helper for display, a dedicated `#id`
   element already present in the markup or added alongside similar ones, and a render function

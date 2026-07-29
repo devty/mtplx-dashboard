@@ -10,6 +10,12 @@ function int(name: string, def: number): number {
   return Number.isFinite(n) ? n : def;
 }
 
+function bool(name: string, def: boolean): boolean {
+  const v = process.env[name];
+  if (v === undefined || v.trim() === '') return def;
+  return !/^(0|false|no|off)$/i.test(v.trim());
+}
+
 export const config = Object.freeze({
   mtplxUrl: str('MTPLX_URL', 'http://127.0.0.1:8000').replace(/\/+$/, ''),
   port: int('PORT', 8123),
@@ -18,4 +24,9 @@ export const config = Object.freeze({
   ringSize: int('RING_SIZE', 120),
   logBufferSize: int('LOG_BUFFER_SIZE', 300),
   maxBackoffMs: int('MAX_BACKOFF_MS', 10000),
+  dbPath: str('DB_PATH', 'data/history.db'),
+  persistEnabled: bool('PERSIST_ENABLED', true),
+  retentionDays: int('RETENTION_DAYS', 30),
+  pruneIntervalMs: int('PRUNE_INTERVAL_MS', 3600000),
+  healthIntervalMs: int('HEALTH_INTERVAL_MS', 5000),
 });

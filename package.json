@@ -5,13 +5,14 @@
   "description": "Node/TypeScript server fronting the MTPLX metrics dashboard and live log, polling MTPLX server-side and pushing updates via SSE.",
   "license": "MIT",
   "scripts": {
-    "dev": "tsx watch server/server.ts",
+    "dev": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx watch server/server.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
+    "start": "NODE_OPTIONS=--disable-warning=ExperimentalWarning node dist/server.js",
+    "test": "node --disable-warning=ExperimentalWarning --import tsx --test server/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.5"
   },
   "dependencies": {
     "express": "^4.19.2"

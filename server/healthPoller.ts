@@ -70,8 +70,13 @@ async function pollOnce(): Promise<void> {
       }
       store.insertGauge('active_requests', num(h.active_requests), now);
       store.insertGauge('requests_completed', num(h.requests_completed), now);
-      store.insertGauge('session_bank_bytes', num(h.session_bank?.max_bytes), now);
-      store.insertGauge('session_bank_entries', num(h.session_bank?.max_entries), now);
+      /* total_nbytes/entries are actual usage; max_bytes/max_entries are the
+         configured ceiling and stay flat forever — sampling the ceiling
+         produced a meaningless flat-line history (verified against real
+         data: 933 identical samples at 51.5 GB / 48). Series names are
+         unchanged; only the source field moves. */
+      store.insertGauge('session_bank_bytes', num(h.session_bank?.total_nbytes), now);
+      store.insertGauge('session_bank_entries', num(h.session_bank?.entries), now);
     }
   } catch {
     /* Leave runId/model at their last known values and retry on the fixed

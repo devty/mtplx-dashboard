@@ -49,11 +49,53 @@ export interface RunRow {
   health: string;
 }
 
+export interface RunAggregate {
+  avg: number | null;
+  min: number | null;
+  max: number | null;
+}
+
+export interface RunSummary {
+  id: number;
+  startedAt: number;
+  endedAt: number | null;
+  pid: number | null;
+  model: string | null;
+  runtimeMode: string | null;
+  generationMode: string | null;
+  depth: number | null;
+  verifyCore: string | null;
+  pagedKvQuantization: string | null;
+  contextWindow: number | null;
+  requestCount: number;
+  decode: RunAggregate;
+  ttft: RunAggregate;
+  accept: RunAggregate;
+}
+
+export interface RunDetail {
+  id: number;
+  startedAt: number;
+  detectedAt: number;
+  endedAt: number | null;
+  pid: number | null;
+  model: string | null;
+  runtimeMode: string | null;
+  generationMode: string | null;
+  depth: number | null;
+  verifyCore: string | null;
+  pagedKvQuantization: string | null;
+  contextWindow: number | null;
+  health: string;
+}
+
 /** Every method here has a production caller. Test-only introspection belongs
  *  in the test file's own read connection, not on this interface. */
 export interface Store {
   status(): PersistStatus;
   upsertRun(info: RunInfo, now: number): number | null;
+  queryRuns(limit: number): RunSummary[];
+  getRun(id: number): RunDetail | null;
   insertRequest(rec: MetricsRecord, runId: number | null, ts: number): void;
   insertGauge(series: string, value: number | null, ts: number): void;
   querySeries(names: string[], from: number, to: number, buckets: number): SeriesResult;
@@ -184,6 +226,52 @@ export const REQUEST_SERIES: Record<string, string> = {
   accept: 'accept_rate',
 };
 
+/** Flat shape node:sqlite returns for the queryRuns() join — mapped to the
+ *  nested RunSummary the API/UI actually want. */
+interface RawRunSummaryRow {
+  id: number;
+  started_at: number;
+  ended_at: number | null;
+  pid: number | null;
+  model: string | null;
+  runtime_mode: string | null;
+  generation_mode: string | null;
+  depth: number | null;
+  verify_core: string | null;
+  paged_kv_quantization: string | null;
+  context_window: number | null;
+  request_count: number;
+  decode_avg: number | null;
+  decode_min: number | null;
+  decode_max: number | null;
+  ttft_avg: number | null;
+  ttft_min: number | null;
+  ttft_max: number | null;
+  accept_avg: number | null;
+  accept_min: number | null;
+  accept_max: number | null;
+}
+
+function toRunSummary(r: RawRunSummaryRow): RunSummary {
+  return {
+    id: r.id,
+    startedAt: r.started_at,
+    endedAt: r.ended_at,
+    pid: r.pid,
+    model: r.model,
+    runtimeMode: r.runtime_mode,
+    generationMode: r.generation_mode,
+    depth: r.depth,
+    verifyCore: r.verify_core,
+    pagedKvQuantization: r.paged_kv_quantization,
+    contextWindow: r.context_window,
+    requestCount: r.request_count,
+    decode: { avg: r.decode_avg, min: r.decode_min, max: r.decode_max },
+    ttft: { avg: r.ttft_avg, min: r.ttft_min, max: r.ttft_max },
+    accept: { avg: r.accept_avg, min: r.accept_min, max: r.accept_max },
+  };
+}
+
 class SqliteStore implements Store {
   private db: DatabaseSync | null = null;
   private ok = true;
@@ -266,6 +354,60 @@ class SqliteStore implements Store {
       return row.id;
     } catch (err) {
       this.fail('upsertRun', err);
+      return null;
+    }
+  }
+
+  queryRuns(limit: number): RunSummary[] {
+    if (!this.db) return [];
+    try {
+      const decode = REQUEST_SERIES.decode;
+      const rows = this.db
+        .prepare(
+          `SELECT
+             run.id, run.started_at, run.ended_at, run.pid, run.model,
+             run.runtime_mode, run.generation_mode, run.depth, run.verify_core,
+             run.paged_kv_quantization, run.context_window,
+             COUNT(request.request_id) AS request_count,
+             AVG(${decode}) AS decode_avg, MIN(${decode}) AS decode_min, MAX(${decode}) AS decode_max,
+             AVG(request.ttft_s) AS ttft_avg, MIN(request.ttft_s) AS ttft_min, MAX(request.ttft_s) AS ttft_max,
+             AVG(request.accept_rate) AS accept_avg, MIN(request.accept_rate) AS accept_min, MAX(request.accept_rate) AS accept_max
+           FROM run
+           LEFT JOIN request ON request.run_id = run.id
+           GROUP BY run.id
+           ORDER BY run.started_at DESC
+           LIMIT ?`
+        )
+        .all(limit) as unknown as RawRunSummaryRow[];
+      return rows.map(toRunSummary);
+    } catch (err) {
+      this.fail('queryRuns', err);
+      return [];
+    }
+  }
+
+  getRun(id: number): RunDetail | null {
+    if (!this.db) return null;
+    try {
+      const row = this.db.prepare('SELECT * FROM run WHERE id = ?').get(id) as RunRow | undefined;
+      if (!row) return null;
+      return {
+        id: row.id,
+        startedAt: row.started_at,
+        detectedAt: row.detected_at,
+        endedAt: row.ended_at,
+        pid: row.pid,
+        model: row.model,
+        runtimeMode: row.runtime_mode,
+        generationMode: row.generation_mode,
+        depth: row.depth,
+        verifyCore: row.verify_core,
+        pagedKvQuantization: row.paged_kv_quantization,
+        contextWindow: row.context_window,
+        health: row.health,
+      };
+    } catch (err) {
+      this.fail('getRun', err);
       return null;
     }
   }

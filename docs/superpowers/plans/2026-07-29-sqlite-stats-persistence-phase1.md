@@ -2060,7 +2060,7 @@ Add the same five rows to the README's env var table, with these descriptions:
 | `PRUNE_INTERVAL_MS` | `3600000` | How often the prune runs. |
 | `HEALTH_INTERVAL_MS` | `5000` | `/health` poll cadence; also drives the model chip. |
 
-Also note in the README that Node `>=22.5` is now required (for `node:sqlite`) and that `npm test` runs the `db.ts` unit tests.
+Also note in the README that Node `>=22.5` is now required (for `node:sqlite`) and that `npm test` runs the `db.ts` unit tests. Describe the harness accurately — the tests use a temp-file database, not `:memory:` (see `server/db.test.ts`'s `tmpStore()` and its comment explaining why).
 
 - [ ] **Step 2: Update `CLAUDE.md`**
 
@@ -2095,9 +2095,19 @@ would overwrite their correct `ts`.
 In **Running / testing**, replace "No automated test suite" with:
 
 ```
-`npm test` runs `node:test` unit tests for `server/db.ts` against an in-memory SQLite database.
-Everything else is still verified by loading the pages against a real MTPLX — there is no
-frontend test harness.
+`npm test` runs `node:test` unit tests for `server/db.ts` against a throwaway on-disk SQLite file
+in a temp directory — not `:memory:`, because an in-memory database is private to the connection
+that opened it and the tests assert through a second read connection. Everything else is still
+verified by loading the pages against a real MTPLX — there is no frontend test harness.
+```
+
+Also add a bullet to **Conventions to preserve**, covering the invariant Task 9 introduced:
+
+```
+- All sparkline data in `index.html` flows through `renderSparks()` / `activeRings()` —
+  never call `sparks.*.render()` directly from a render function or from `applyPayload()`.
+  A direct call bypasses the range selector, so the next SSE tick would silently overwrite a
+  user-selected historical range with live ring data.
 ```
 
 - [ ] **Step 2b: Full end-to-end verification**

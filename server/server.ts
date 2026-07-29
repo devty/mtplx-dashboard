@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import { config } from './config';
-import { createStore } from './db';
+import { createStore, REQUEST_SERIES } from './db';
 import * as poller from './metricsPoller';
 import * as healthPoller from './healthPoller';
 import * as sse from './sse';
@@ -28,6 +28,46 @@ app.get('/api/events', (req, res) => {
 // covers initial load.
 app.get('/api/metrics', (_req, res) => {
   res.json(poller.getSnapshot());
+});
+
+/** Parses the shared from/to/buckets/names query shape. `buckets` is clamped
+ *  because it sizes the GROUP BY output the client has to render. */
+function parseRange(q: Record<string, unknown>, fallbackNames: string[]) {
+  const int = (v: unknown, def: number): number => {
+    const n = Number.parseInt(String(v ?? ''), 10);
+    return Number.isFinite(n) ? n : def;
+  };
+  const to = int(q.to, Date.now());
+  const from = int(q.from, to - 3600000);
+  const buckets = Math.min(2000, Math.max(1, int(q.buckets, 240)));
+  const raw = typeof q.names === 'string' ? q.names : '';
+  const names = raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : fallbackNames;
+  return { from, to, buckets, names };
+}
+
+app.get('/api/history/series', (req, res) => {
+  const { from, to, buckets, names } = parseRange(
+    req.query as Record<string, unknown>,
+    Object.keys(REQUEST_SERIES)
+  );
+  // `in` walks the prototype chain (so `?names=constructor` would slip past a
+  // `n in REQUEST_SERIES` check and reach querySeries, whose Object.hasOwn
+  // guard would then throw and escape this handler as a 500). Object.hasOwn
+  // here keeps that rejection at the HTTP boundary as the intended 400.
+  const unknown = names.filter(n => !Object.hasOwn(REQUEST_SERIES, n));
+  if (unknown.length) {
+    res.status(400).json({
+      error: `unknown series: ${unknown.join(', ')}`,
+      known: Object.keys(REQUEST_SERIES),
+    });
+    return;
+  }
+  res.json(store.querySeries(names, from, to, buckets));
+});
+
+app.get('/api/history/gauges', (req, res) => {
+  const { from, to, buckets, names } = parseRange(req.query as Record<string, unknown>, []);
+  res.json(store.queryGauges(names, from, to, buckets));
 });
 
 const server = app.listen(config.port, () => {

@@ -70,6 +70,26 @@ app.get('/api/history/gauges', (req, res) => {
   res.json(store.queryGauges(names, from, to, buckets));
 });
 
+app.get('/api/history/runs', (req, res) => {
+  const raw = Number.parseInt(String(req.query.limit ?? ''), 10);
+  const limit = Number.isFinite(raw) ? Math.min(100, Math.max(1, raw)) : 20;
+  res.json({ runs: store.queryRuns(limit) });
+});
+
+app.get('/api/history/runs/:id', (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: 'invalid run id' });
+    return;
+  }
+  const run = store.getRun(id);
+  if (!run) {
+    res.status(404).json({ error: 'run not found' });
+    return;
+  }
+  res.json(run);
+});
+
 const server = app.listen(config.port, () => {
   console.log(`mtplx-dashboard listening on :${config.port}, polling ${config.mtplxUrl}`);
 });

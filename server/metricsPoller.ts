@@ -1,5 +1,7 @@
 import { config } from './config';
 import { broadcastTick } from './sse';
+import * as healthPoller from './healthPoller';
+import type { Store } from './db';
 import type {
   MetricsRecord,
   MtplxMetricsResponse,
@@ -24,10 +26,9 @@ let lastOkAt: number | null = null;
 let connected = false;
 let seeded = false;
 let consecutiveFailures = 0;
-let model: string | null = null;
+let store: Store | null = null;
 
 let pollTimer: NodeJS.Timeout | null = null;
-let modelTimer: NodeJS.Timeout | null = null;
 let stopped = true;
 
 /* ================================================================= helpers
@@ -159,31 +160,13 @@ async function pollOnce(): Promise<void> {
   }
 }
 
-/* Mirrors index.html's former fetchModel(): low-frequency, independent of the
-   metrics poll loop, only broadcasts when the model id actually changes. */
-async function pollModelOnce(): Promise<void> {
-  try {
-    const res = await fetchWithTimeout(`${config.mtplxUrl}/v1/models`, config.mtplxTimeoutMs);
-    const j = (await res.json()) as { data?: { id?: string }[] };
-    const id = j?.data?.[0]?.id;
-    if (id && id !== model) {
-      model = id;
-      broadcastTick(getSnapshot());
-    }
-  } catch {
-    /* retry on the fixed interval below regardless of outcome */
-  } finally {
-    if (!stopped) modelTimer = setTimeout(() => void pollModelOnce(), 5000);
-  }
-}
-
 /* ================================================================= public API */
 export function getSnapshot(): StatePayload {
   return {
     connected,
     lastOkAt,
     lastChangeAt,
-    model,
+    model: healthPoller.getModel(),
     latest,
     toolParseCounters,
     rings: {
@@ -198,17 +181,19 @@ export function getSnapshot(): StatePayload {
     },
     ringSize: config.ringSize,
     logBufferSize: config.logBufferSize,
+    persist: store
+      ? store.status()
+      : { enabled: false, ok: true, lastError: null },
   };
 }
 
-export function start(): void {
+export function start(s: Store): void {
+  store = s;
   stopped = false;
   void pollOnce();
-  void pollModelOnce();
 }
 
 export function stop(): void {
   stopped = true;
   if (pollTimer) clearTimeout(pollTimer);
-  if (modelTimer) clearTimeout(modelTimer);
 }

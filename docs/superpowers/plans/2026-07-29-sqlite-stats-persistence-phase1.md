@@ -927,6 +927,15 @@ test('decode falls back to decode_tok_s when display is absent', () => {
 test('querySeries rejects names outside the allowlist', () => {
   const { store, cleanup } = tmpStore();
   assert.throws(() => store.querySeries(['ttft; DROP TABLE request'], 0, 1000, 1), /unknown series/i);
+  /* Prototype-chain members must be rejected too: a bare REQUEST_SERIES[name]
+     lookup returns a truthy inherited value for these, which would skip the
+     throw and stringify a native function into the SQL. */
+  for (const evil of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+    assert.throws(() => store.querySeries([evil], 0, 1000, 1), /unknown series/i);
+  }
+  /* A rejected name is a caller bug, not a storage failure — it must not run
+     fail() and permanently pin status().ok to false for the process. */
+  assert.equal(store.status().ok, true);
   assert.deepEqual(Object.keys(REQUEST_SERIES).sort(), ['accept', 'decode', 'prefill', 'ttft']);
   cleanup();
 });
@@ -1034,7 +1043,11 @@ Add to `SqliteStore`:
     const bucketMs = this.bucketMs(from, to, buckets);
     const series: Record<string, SeriesPoint[]> = {};
     for (const name of names) {
-      const expr = REQUEST_SERIES[name];
+      /* Object.hasOwn, not a bare `REQUEST_SERIES[name]` lookup: a plain index
+         resolves up the prototype chain, so names like 'constructor' or
+         'toString' would return a truthy inherited value, skip this throw, and
+         get stringified into the SQL below. */
+      const expr = Object.hasOwn(REQUEST_SERIES, name) ? REQUEST_SERIES[name] : undefined;
       if (!expr) throw new Error(`unknown series: ${name}`);
       series[name] = this.bucketQuery(
         `SELECT CAST((ts - ?) / ? AS INTEGER) AS b,

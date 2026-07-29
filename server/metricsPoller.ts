@@ -27,6 +27,7 @@ let connected = false;
 let seeded = false;
 let consecutiveFailures = 0;
 let store: Store | null = null;
+let lastToolParseSig: string | null = null;
 
 let pollTimer: NodeJS.Timeout | null = null;
 let stopped = true;
@@ -80,12 +81,36 @@ function ingestLog(recent: MetricsRecord[], now: number): string[] {
     logSeen.set(id, { firstSeen: now, data: m });
     logOrder.unshift(id);
     added.push(id);
+    /* First sight of this request_id — mirror it to SQLite with the same
+       firstSeen stamp the in-memory buffer uses. */
+    store?.insertRequest(m, healthPoller.getCurrentRunId(), now);
   });
   while (logOrder.length > config.logBufferSize) {
     const drop = logOrder.pop();
     if (drop) logSeen.delete(drop);
   }
   return added;
+}
+
+/** Cumulative tool-parse counters change rarely; this gates gauge writes so an
+ *  idle server doesn't accumulate one identical row per second. */
+const TOOL_PARSE_SERIES = [
+  'tool_parse_success',
+  'tool_parse_fallback',
+  'unknown_tool_name',
+  'malformed_tool_call',
+  'unclosed_tool_call',
+] as const;
+
+function writeToolParseGauges(c: ToolParseCounters | null, now: number): void {
+  if (!c || !store) return;
+  const nextSig = TOOL_PARSE_SERIES.map(k => c[k] ?? '').join('|');
+  if (nextSig === lastToolParseSig) return;
+  lastToolParseSig = nextSig;
+  for (const k of TOOL_PARSE_SERIES) {
+    const v = c[k];
+    store.insertGauge(k, typeof v === 'number' ? v : null, now);
+  }
 }
 
 /* ================================================================= polling */
@@ -136,6 +161,7 @@ async function pollOnce(): Promise<void> {
 
     latest = m ?? latest;
     toolParseCounters = data.tool_parse_counters ?? toolParseCounters;
+    writeToolParseGauges(toolParseCounters, now);
 
     const newLogIds = ingestLog(data.recent || [], now);
     if (newLogIds.length) changed = true;

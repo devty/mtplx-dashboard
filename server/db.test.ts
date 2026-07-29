@@ -232,3 +232,77 @@ test('a record without a request_id is skipped', () => {
   assert.equal(read(REQUESTS).length, 0);
   cleanup();
 });
+
+import { REQUEST_SERIES } from './db';
+
+test('querySeries buckets request rows and reports bucket starts', () => {
+  const { store, cleanup } = tmpStore();
+  const base = 1_700_000_000_000;
+  // two requests in bucket 0, one in bucket 2, over a 4-bucket window
+  store.insertRequest({ ...REC, request_id: 'a', display_decode_tok_s: 10 }, null, base + 100);
+  store.insertRequest({ ...REC, request_id: 'b', display_decode_tok_s: 20 }, null, base + 200);
+  store.insertRequest({ ...REC, request_id: 'c', display_decode_tok_s: 50 }, null, base + 2500);
+
+  const res = store.querySeries(['decode'], base, base + 4000, 4);
+  assert.equal(res.bucketMs, 1000);
+  assert.deepEqual(res.series.decode, [
+    { ts: base, avg: 15, min: 10, max: 20, n: 2 },
+    { ts: base + 2000, avg: 50, min: 50, max: 50, n: 1 },
+  ]);
+  cleanup();
+});
+
+test('decode falls back to decode_tok_s when display is absent', () => {
+  const { store, cleanup } = tmpStore();
+  const base = 1_700_000_000_000;
+  store.insertRequest(
+    { ...REC, request_id: 'a', display_decode_tok_s: null, decode_tok_s: 7 },
+    null,
+    base + 10
+  );
+  const res = store.querySeries(['decode'], base, base + 1000, 1);
+  assert.equal(res.series.decode[0].avg, 7);
+  cleanup();
+});
+
+test('querySeries rejects names outside the allowlist', () => {
+  const { store, cleanup } = tmpStore();
+  assert.throws(() => store.querySeries(['ttft; DROP TABLE request'], 0, 1000, 1), /unknown series/i);
+  assert.deepEqual(Object.keys(REQUEST_SERIES).sort(), ['accept', 'decode', 'prefill', 'ttft']);
+  cleanup();
+});
+
+test('gauges round-trip through queryGauges', () => {
+  const { store, cleanup } = tmpStore();
+  const base = 1_700_000_000_000;
+  store.insertGauge('session_bank_bytes', 100, base + 10);
+  store.insertGauge('session_bank_bytes', 300, base + 20);
+  store.insertGauge('active_requests', 1, base + 10);
+
+  const res = store.queryGauges(['session_bank_bytes'], base, base + 1000, 1);
+  assert.deepEqual(res.series.session_bank_bytes, [
+    { ts: base, avg: 200, min: 100, max: 300, n: 2 },
+  ]);
+  cleanup();
+});
+
+test('an empty window yields an empty array, not an error', () => {
+  const { store, cleanup } = tmpStore();
+  const res = store.querySeries(['decode', 'ttft'], 0, 1000, 10);
+  assert.deepEqual(res.series.decode, []);
+  assert.deepEqual(res.series.ttft, []);
+  cleanup();
+});
+
+test('a disabled store returns empty series', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
+  const store = createStore({
+    path: path.join(dir, 'history.db'),
+    enabled: false,
+    retentionDays: 30,
+  });
+  const res = store.querySeries(['decode'], 0, 1000, 10);
+  assert.deepEqual(res.series.decode, []);
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

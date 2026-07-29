@@ -56,6 +56,9 @@ export interface Store {
   upsertRun(info: RunInfo, now: number): number | null;
   currentRunId(): number | null;
   insertRequest(rec: MetricsRecord, runId: number | null, ts: number): void;
+  insertGauge(series: string, value: number | null, ts: number): void;
+  querySeries(names: string[], from: number, to: number, buckets: number): SeriesResult;
+  queryGauges(names: string[], from: number, to: number, buckets: number): SeriesResult;
   close(): void;
 }
 
@@ -153,6 +156,32 @@ export function acceptRate(rec: MetricsRecord): number | null {
   const drafted = sumArr(rec.drafted_by_depth);
   return drafted > 0 ? sumArr(rec.accepted_by_depth) / drafted : null;
 }
+
+export interface SeriesPoint {
+  /** Bucket start, ms. */
+  ts: number;
+  avg: number | null;
+  min: number | null;
+  max: number | null;
+  n: number;
+}
+
+export interface SeriesResult {
+  from: number;
+  to: number;
+  bucketMs: number;
+  series: Record<string, SeriesPoint[]>;
+}
+
+/** Closed allowlist: series name → SQL expression over `request`. Names arrive
+ *  from query strings, so nothing outside this map is ever interpolated. The
+ *  COALESCE fallbacks mirror sample() in metricsPoller.ts exactly. */
+export const REQUEST_SERIES: Record<string, string> = {
+  decode: 'COALESCE(display_decode_tok_s, decode_tok_s)',
+  prefill: 'COALESCE(prefill_tok_s, prompt_tps)',
+  ttft: 'ttft_s',
+  accept: 'accept_rate',
+};
 
 class SqliteStore implements Store {
   private db: DatabaseSync | null = null;
@@ -320,6 +349,88 @@ class SqliteStore implements Store {
         );
     } catch (err) {
       this.fail('insertRequest', err);
+    }
+  }
+
+  insertGauge(series: string, value: number | null, ts: number): void {
+    if (!this.db) return;
+    try {
+      this.db
+        .prepare('INSERT INTO gauge (ts, series, value) VALUES (?, ?, ?)')
+        .run(ts, series, num(value));
+    } catch (err) {
+      this.fail('insertGauge', err);
+    }
+  }
+
+  private bucketMs(from: number, to: number, buckets: number): number {
+    return Math.max(1, Math.ceil((to - from) / Math.max(1, buckets)));
+  }
+
+  querySeries(names: string[], from: number, to: number, buckets: number): SeriesResult {
+    const bucketMs = this.bucketMs(from, to, buckets);
+    const series: Record<string, SeriesPoint[]> = {};
+    for (const name of names) {
+      const expr = REQUEST_SERIES[name];
+      if (!expr) throw new Error(`unknown series: ${name}`);
+      series[name] = this.bucketQuery(
+        `SELECT CAST((ts - ?) / ? AS INTEGER) AS b,
+                AVG(${expr}) AS avg, MIN(${expr}) AS min, MAX(${expr}) AS max,
+                COUNT(${expr}) AS n
+           FROM request
+          WHERE ts >= ? AND ts < ? AND ${expr} IS NOT NULL
+          GROUP BY b ORDER BY b`,
+        [from, bucketMs, from, to],
+        from,
+        bucketMs
+      );
+    }
+    return { from, to, bucketMs, series };
+  }
+
+  queryGauges(names: string[], from: number, to: number, buckets: number): SeriesResult {
+    const bucketMs = this.bucketMs(from, to, buckets);
+    const series: Record<string, SeriesPoint[]> = {};
+    for (const name of names) {
+      series[name] = this.bucketQuery(
+        `SELECT CAST((ts - ?) / ? AS INTEGER) AS b,
+                AVG(value) AS avg, MIN(value) AS min, MAX(value) AS max, COUNT(value) AS n
+           FROM gauge
+          WHERE series = ? AND ts >= ? AND ts < ? AND value IS NOT NULL
+          GROUP BY b ORDER BY b`,
+        [from, bucketMs, name, from, to],
+        from,
+        bucketMs
+      );
+    }
+    return { from, to, bucketMs, series };
+  }
+
+  private bucketQuery(
+    sql: string,
+    params: (number | string)[],
+    from: number,
+    bucketMs: number
+  ): SeriesPoint[] {
+    if (!this.db) return [];
+    try {
+      const rows = this.db.prepare(sql).all(...params) as unknown as {
+        b: number;
+        avg: number | null;
+        min: number | null;
+        max: number | null;
+        n: number;
+      }[];
+      return rows.map(r => ({
+        ts: from + r.b * bucketMs,
+        avg: r.avg,
+        min: r.min,
+        max: r.max,
+        n: r.n,
+      }));
+    } catch (err) {
+      this.fail('bucketQuery', err);
+      return [];
     }
   }
 

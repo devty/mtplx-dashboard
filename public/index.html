@@ -418,6 +418,7 @@ let connected = false;
 let rangeMs = null;
 let historyRings = { decode: [], prefill: [], ttft: [], accept: [] };
 let historyTimer = null;
+let historyGen = 0; // bumped on every setRange() call; loadHistory() drops stale responses
 
 /* ================================================================= utils */
 const $ = s => document.getElementById(s);
@@ -719,6 +720,7 @@ function renderStatus() {
    — only the array they're handed changes. */
 async function loadHistory() {
   if (rangeMs === null) return;
+  const gen = ++historyGen; // this call's generation — setRange() bumps historyGen on every switch
   const to = Date.now(), from = to - rangeMs;
   try {
     const r = await fetch(
@@ -726,6 +728,10 @@ async function loadHistory() {
     );
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
+    /* A newer range was selected while this request was in flight — its data is
+       for a window the user is no longer looking at. Drop it rather than
+       painting it under a button that says something else. */
+    if (gen !== historyGen) return;
     historyRings = {
       decode:  (j.series.decode  || []).map(p => p.avg),
       prefill: (j.series.prefill || []).map(p => p.avg),
@@ -733,6 +739,7 @@ async function loadHistory() {
       accept:  (j.series.accept  || []).map(p => p.avg),
     };
   } catch {
+    if (gen !== historyGen) return;
     historyRings = { decode: [], prefill: [], ttft: [], accept: [] };
   }
   renderSparks();
@@ -758,6 +765,10 @@ function renderSparks() {
 
 function setRange(value) {
   rangeMs = value === 'live' ? null : Number(value);
+  /* Invalidate any loadHistory() request still in flight from the previous
+     range — including when switching back to live — so a late response can't
+     land under a button (or a live view) it no longer applies to. */
+  historyGen++;
   for (const b of $('range-sel').querySelectorAll('button')) {
     b.classList.toggle('active', b.dataset.range === value);
   }

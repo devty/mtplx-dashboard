@@ -1870,6 +1870,7 @@ In the state block (after line 398, `let connected = false;`), add:
 let rangeMs = null;
 let historyRings = { decode: [], prefill: [], ttft: [], accept: [] };
 let historyTimer = null;
+let historyGen = 0; // invalidates in-flight loadHistory() responses on range change
 ```
 
 Add these functions immediately before `applyPayload` (line 710):
@@ -1881,6 +1882,12 @@ Add these functions immediately before `applyPayload` (line 710):
    — only the array they're handed changes. */
 async function loadHistory() {
   if (rangeMs === null) return;
+  /* Generation token: two range clicks in quick succession leave two fetches in
+     flight, and they can resolve out of order — painting 1h data under a
+     highlighted 24h button, silently. A stale response drops instead. The guard
+     covers the error path too, or a stale failure would blank the current
+     range's sparklines. */
+  const gen = ++historyGen;
   const to = Date.now(), from = to - rangeMs;
   try {
     const r = await fetch(
@@ -1888,6 +1895,7 @@ async function loadHistory() {
     );
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
+    if (gen !== historyGen) return;
     historyRings = {
       decode:  (j.series.decode  || []).map(p => p.avg),
       prefill: (j.series.prefill || []).map(p => p.avg),
@@ -1895,6 +1903,7 @@ async function loadHistory() {
       accept:  (j.series.accept  || []).map(p => p.avg),
     };
   } catch {
+    if (gen !== historyGen) return;
     historyRings = { decode: [], prefill: [], ttft: [], accept: [] };
   }
   renderSparks();

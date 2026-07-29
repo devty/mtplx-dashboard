@@ -352,3 +352,102 @@ test('retentionDays of 0 prunes everything', () => {
   assert.equal(read(REQUESTS).length, 0);
   cleanup();
 });
+
+import type { RunDetail } from './db';
+
+test('queryRuns returns an empty array when there are no runs', () => {
+  const { store, cleanup } = tmpStore();
+  assert.deepEqual(store.queryRuns(20), []);
+  cleanup();
+});
+
+test('queryRuns includes a run with zero requests, aggregates null', () => {
+  const { store, cleanup } = tmpStore();
+  const runA = store.upsertRun(runInfo(100, 1_700_000_000_000), 1_700_000_001_000);
+  const summaries = store.queryRuns(20);
+  assert.equal(summaries.length, 1);
+  assert.equal(summaries[0].id, runA);
+  assert.equal(summaries[0].requestCount, 0);
+  assert.deepEqual(summaries[0].decode, { avg: null, min: null, max: null });
+  assert.deepEqual(summaries[0].ttft, { avg: null, min: null, max: null });
+  assert.deepEqual(summaries[0].accept, { avg: null, min: null, max: null });
+  cleanup();
+});
+
+test('queryRuns aggregates requests per run and orders newest-first', () => {
+  const { store, cleanup } = tmpStore();
+  const runA = store.upsertRun(runInfo(100, 1_700_000_000_000, { model: 'model-a' }), 1_700_000_001_000);
+  const runB = store.upsertRun(runInfo(200, 1_700_000_500_000, { model: 'model-b' }), 1_700_000_501_000);
+
+  store.insertRequest(
+    { ...REC, request_id: 'a1', display_decode_tok_s: 10, ttft_s: 1.0, drafted_by_depth: [10], accepted_by_depth: [5] },
+    runA, 1_700_000_002_000
+  );
+  store.insertRequest(
+    { ...REC, request_id: 'a2', display_decode_tok_s: 20, ttft_s: 2.0, drafted_by_depth: [10], accepted_by_depth: [10] },
+    runA, 1_700_000_003_000
+  );
+  store.insertRequest(
+    { ...REC, request_id: 'b1', display_decode_tok_s: 100, ttft_s: 0.1, drafted_by_depth: [4], accepted_by_depth: [4] },
+    runB, 1_700_000_502_000
+  );
+
+  const summaries = store.queryRuns(20);
+  assert.equal(summaries.length, 2);
+  assert.equal(summaries[0].id, runB);
+  assert.equal(summaries[0].requestCount, 1);
+  assert.deepEqual(summaries[0].decode, { avg: 100, min: 100, max: 100 });
+  assert.equal(summaries[1].id, runA);
+  assert.equal(summaries[1].requestCount, 2);
+  assert.deepEqual(summaries[1].decode, { avg: 15, min: 10, max: 20 });
+  assert.deepEqual(summaries[1].ttft, { avg: 1.5, min: 1.0, max: 2.0 });
+  assert.deepEqual(summaries[1].accept, { avg: 0.75, min: 0.5, max: 1.0 });
+  cleanup();
+});
+
+test('queryRuns respects limit', () => {
+  const { store, cleanup } = tmpStore();
+  store.upsertRun(runInfo(100, 1_700_000_000_000), 1_700_000_001_000);
+  store.upsertRun(runInfo(200, 1_700_000_500_000), 1_700_000_501_000);
+  const runC = store.upsertRun(runInfo(300, 1_700_001_000_000), 1_700_001_001_000);
+  const summaries = store.queryRuns(1);
+  assert.equal(summaries.length, 1);
+  assert.equal(summaries[0].id, runC);
+  cleanup();
+});
+
+test('a disabled store returns an empty run list', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
+  const store = createStore({ path: path.join(dir, 'history.db'), enabled: false, retentionDays: 30 });
+  assert.deepEqual(store.queryRuns(20), []);
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('getRun returns the full run including parsed health', () => {
+  const { store, cleanup } = tmpStore();
+  const health = JSON.stringify({ ok: true, foo: 'bar' });
+  const id = store.upsertRun(runInfo(100, 1_700_000_000_000, { depth: 3, health }), 1_700_000_001_000) as number;
+  const detail = store.getRun(id) as RunDetail;
+  assert.ok(detail);
+  assert.equal(detail.id, id);
+  assert.equal(detail.startedAt, 1_700_000_000_000);
+  assert.equal(detail.depth, 3);
+  assert.equal(detail.runtimeMode, 'Sustained Max MTP');
+  assert.deepEqual(JSON.parse(detail.health), { ok: true, foo: 'bar' });
+  cleanup();
+});
+
+test('getRun returns null for an unknown id', () => {
+  const { store, cleanup } = tmpStore();
+  assert.equal(store.getRun(999), null);
+  cleanup();
+});
+
+test('getRun on a disabled store returns null', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
+  const store = createStore({ path: path.join(dir, 'history.db'), enabled: false, retentionDays: 30 });
+  assert.equal(store.getRun(1), null);
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

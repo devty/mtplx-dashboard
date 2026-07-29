@@ -1175,7 +1175,13 @@ test('prune keeps the open run but drops old closed runs', () => {
   const { store, read, cleanup } = tmpStore(1);
   const now = 1_700_000_000_000;
   const old = store.upsertRun(runInfo(1, now - 3 * DAY), now - 3 * DAY);
-  const open = store.upsertRun(runInfo(2, now - 1000), now - 1000);
+  /* The SECOND call's `now` is what stamps ended_at on the first run, so it
+     must sit before the retention cutoff for that run to become prunable.
+     Keeping startedAt and now equal here also keeps the pair coherent —
+     detected_at can never precede started_at in production — and makes the
+     surviving open run two days old, demonstrating that an open run is kept
+     regardless of age. */
+  const open = store.upsertRun(runInfo(2, now - 2 * DAY), now - 2 * DAY);
   assert.equal(read<RunRow>(RUNS).length, 2);
 
   store.prune(now);

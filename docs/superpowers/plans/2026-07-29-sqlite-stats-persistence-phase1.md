@@ -1887,7 +1887,7 @@ async function loadHistory() {
      highlighted 24h button, silently. A stale response drops instead. The guard
      covers the error path too, or a stale failure would blank the current
      range's sparklines. */
-  const gen = ++historyGen;
+  const gen = ++historyGen; // this call's generation — setRange() bumps historyGen on every switch
   const to = Date.now(), from = to - rangeMs;
   try {
     const r = await fetch(
@@ -1929,6 +1929,12 @@ function renderSparks() {
 
 function setRange(value) {
   rangeMs = value === 'live' ? null : Number(value);
+  /* Invalidate any loadHistory() request still in flight from the previous
+     range — including when switching back to live — so a late response can't
+     land under a button (or a live view) it no longer applies to. Bumping here
+     rather than only inside loadHistory() means a stale response never even
+     mutates historyRings, instead of being masked later by activeRings(). */
+  historyGen++;
   for (const b of $('range-sel').querySelectorAll('button')) {
     b.classList.toggle('active', b.dataset.range === value);
   }

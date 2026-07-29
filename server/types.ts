@@ -83,7 +83,14 @@ export interface HealthResponse {
   requests_completed?: number | null;
   /** started_at is float SECONDS here, unlike every stored timestamp. */
   startup?: { pid?: number | null; started_at?: number | null };
-  session_bank?: { max_entries?: number | null; max_bytes?: number | null; [k: string]: unknown };
+  session_bank?: {
+    max_entries?: number | null;
+    max_bytes?: number | null;
+    /** Actual usage — what the session-bank gauges sample, not the ceiling above. */
+    entries?: number | null;
+    total_nbytes?: number | null;
+    [k: string]: unknown;
+  };
   [key: string]: unknown;
 }
 

@@ -72,8 +72,10 @@ override anymore — polling happens once, server-side, not per browser tab.
   `GET /api/metrics` (plain JSON snapshot, debug/convenience only — no client code depends on it),
   `GET /api/history/series` and `GET /api/history/gauges` (bucketed history reads off `db.ts`,
   rejecting unknown series names in `/api/history/series` with HTTP 400 via `Object.hasOwn` —
-  deliberately not the `in` operator, which walks the prototype chain), and graceful
-  `SIGINT`/`SIGTERM` shutdown gated by a `shuttingDown` flag so the startup promise chain
+  deliberately not the `in` operator, which walks the prototype chain), `GET /api/history/runs`
+  and `GET /api/history/runs/:id` (run listing with per-run aggregates, and the only endpoint
+  that ever sends a run's full `/health` JSON), and graceful `SIGINT`/`SIGTERM` shutdown gated by
+  a `shuttingDown` flag so the startup promise chain
   (`healthPoller.start().then(() => poller.start())`) can't start the metrics poller after
   shutdown has already begun.
 
@@ -107,11 +109,16 @@ The in-memory ring/log buffers are still the live path; SQLite is the durable on
 one row per completed request (numbers plus cheap attribution text — never prompt/response
 bodies), `run` holds one row per detected MTPLX run with its `/health` config snapshot, and
 `gauge` holds only the series that have no owning request (`session_bank_*`, `active_requests`,
-`requests_completed`, `tool_parse_*`). Sparkline series are NOT stored as gauges — they are
+`requests_completed`, `tool_parse_*`). `session_bank_bytes`/`session_bank_entries` sample
+`/health`'s `session_bank.total_nbytes`/`entries` (actual usage) — NOT `max_bytes`/`max_entries`
+(the configured ceiling, constant for the process lifetime). Getting this backwards is an easy
+mistake since the field names read plausibly either way; it happened once already (Phase 1) and
+produced a flat-line gauge history. Sparkline series are NOT stored as gauges — they are
 derived from `request` on read via `REQUEST_SERIES`, whose expressions mirror `sample()` exactly
 so live and historical values cannot drift. Writes use `INSERT OR IGNORE` on `request_id`:
 MTPLX's `recent[]` replays already-stored requests after a dashboard restart, and `OR REPLACE`
-would overwrite their correct `ts`.
+would overwrite their correct `ts`. `queryRuns()` LEFT JOINs `request` onto `run` (never `INNER`)
+so a run with zero requests still appears with null aggregates rather than being dropped.
 
 ### Change detection
 `sig()` in `metricsPoller.ts` (session_id + elapsed + token counts + ttft) detects whether
@@ -136,14 +143,15 @@ just works without re-running JS.
 
 ### Styling
 CSS variables under `:root` define a light palette; a `@media (prefers-color-scheme: dark)` block
-overrides the same variable names for dark mode. `index.html` and `log.html` duplicate this token
-block — keep them in sync when adjusting the palette. Layout is a 12-column CSS grid of `.card`
-elements (`index.html`) with `span` modifier classes (`.hero`, `.wide`, `.third`, `.half`) and
-breakpoints at 1080px and 680px.
+overrides the same variable names for dark mode. `index.html`, `log.html`, `detail.html`, and
+`history.html` all duplicate this token block — keep them in sync when adjusting the palette.
+Layout is a 12-column CSS grid of `.card` elements with `span` modifier classes (`.hero`, `.wide`,
+`.third`, `.half` in `index.html`; `history.html` only needs `.half`) and breakpoints at 1080px
+and 680px.
 
 ### Connection/offline handling
-Two distinct failure modes map onto the same `body.disconnected` class / `#banner` / `.dot.offline`
-UI on both pages:
+Two distinct failure modes map onto the same `body.disconnected` class / `#banner` /
+`.dot.offline` UI on `index.html`, `log.html`, and `detail.html`:
 1. **MTPLX unreachable, Node server fine** — `metricsPoller.ts` flips `connected` false and
    broadcasts a `tick` immediately (not waiting for backoff); `applyPayload()` on the client sets
    `body.disconnected` from the payload.
@@ -151,6 +159,10 @@ UI on both pages:
    auto-reconnect handles it. `es.onerror` flips `disconnected` locally in the meantime, and on
    reconnect the server's `/api/events` handler sends a fresh `snapshot` which clears it again
    once healthy.
+
+`history.html` participates in neither: it holds no SSE connection at all, so there is no
+`body.disconnected` state to manage there — a failed fetch just leaves its own affected section
+showing "no data" rather than the whole page degrading.
 
 ## Conventions to preserve
 
@@ -174,3 +186,12 @@ UI on both pages:
   rather than rendering `rings` itself, and that indirection is load-bearing: a direct call bypasses
   the range selector, so an incoming SSE `tick` would silently overwrite a user's selected
   historical range with live ring data, with no error and nothing obviously wrong in review.
+- `history.html`'s `makeSpark()` is a deliberate fork of `index.html`'s, not a bug: it adds
+  restart-marker overlays (dashed lines at each run's `startedAt`) that `index.html` has no use
+  for. Don't try to reconcile the two copies into one — that's the shared-module refactor this
+  project's duplication convention exists to avoid.
+- The run config diff on `history.html` is intentionally scoped to the six columns promoted onto
+  `run` (`model`, `runtime_mode`, `depth`, `verify_core`, `paged_kv_quantization`,
+  `context_window`) — never the full `/health` JSON. `profile.env` alone carries ~30
+  MTPLX-internal flags per run; a full diff would bury every real config change in noise from
+  fields nobody set on purpose.

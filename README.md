@@ -21,7 +21,7 @@ build step for the frontend.
 
 ---
 
-## Two pages
+## Pages
 
 ### `public/index.html` — Metrics dashboard
 The hero is **speculative decoding**: tokens committed per verify pass (an autoregressive
@@ -60,6 +60,16 @@ chars" indicator (see Limitations). If you run a body-capture-enabled MTPLX (app
 `response_text`, and the page adds **Full prompt** (per-message transcript) and **Response** cards.
 These fields are optional — the page degrades gracefully to the preview when they're absent.
 
+### `public/history.html` — Run history & comparison
+Every detected MTPLX run (restart), newest first, with per-run request counts and decode/TTFT/
+acceptance aggregates. Check two rows to see a config diff — scoped to the six columns actually
+promoted onto a `run` row (model, runtime mode, depth, verify core, paged-KV quantization, context
+window), not a deep diff of the full `/health` blob, which carries dozens of internal flags that
+would bury a real change in noise. Below the table, four gauge charts (session-bank usage,
+active/completed requests) show dashed markers at each run's start. Unlike the other three pages,
+this one has no SSE connection — it fetches on load and offers a manual **Refresh** button, since
+historical/forensic browsing has no need for sub-minute freshness.
+
 The pages cross-link via a header nav.
 
 ---
@@ -78,8 +88,9 @@ cd mtplx-dashboard
 npm install
 npm run dev
 # then open:
-#   http://127.0.0.1:8123/          → dashboard
-#   http://127.0.0.1:8123/log.html  → live log
+#   http://127.0.0.1:8123/              → dashboard
+#   http://127.0.0.1:8123/log.html      → live log
+#   http://127.0.0.1:8123/history.html  → run history & comparison
 ```
 
 `npm run dev` runs the TypeScript server directly (via `tsx watch`, auto-restarting on change) —
@@ -128,7 +139,8 @@ MTPLX_URL=http://box.local:8000 npm run dev
 mtplx-dashboard/
 ├── server/              TypeScript server — polls MTPLX, pushes SSE
 │   ├── server.ts          Express app: serves public/, /api/events (SSE), /api/metrics,
-│   │                        /api/history/series, /api/history/gauges
+│   │                        /api/history/series, /api/history/gauges, /api/history/runs,
+│   │                        /api/history/runs/:id
 │   ├── metricsPoller.ts   Poll loop, retry/backoff, ring/log buffers, change detection,
 │   │                        request-row + tool-parse-gauge persistence
 │   ├── healthPoller.ts    Low-frequency /health loop — run detection, gauges, model chip
@@ -141,7 +153,8 @@ mtplx-dashboard/
 ├── public/              Static frontend — plain HTML/CSS/JS, no build step
 │   ├── index.html         Metrics dashboard (with live/1h/24h/7d history range selector)
 │   ├── log.html           Live activity log
-│   └── detail.html        Standalone single-request detail page
+│   ├── detail.html        Standalone single-request detail page
+│   └── history.html       Run history: run table, config diff, gauge charts with restart markers
 ├── data/                SQLite history file lives here by default (DB_PATH, gitignored)
 ├── docs/                README screenshots
 ├── package.json         Scripts: dev / build / start / test / typecheck
@@ -169,9 +182,12 @@ as-is by `express.static`. Only `server/**/*.ts` goes through TypeScript.
   changed (the server, not a per-tab ring buffer).
 - Because polling happens server-to-server, MTPLX's CORS reflection is no longer relevant — the
   browser only ever talks same-origin to this Node server.
-- Both pages are light/dark aware (`prefers-color-scheme`) and degrade gracefully when MTPLX is
-  unreachable (dim + reconnect banner, last values retained) or when the SSE connection itself
-  drops (native `EventSource` auto-reconnect, no custom retry logic needed).
+- `index.html`, `log.html`, and `detail.html` are light/dark aware (`prefers-color-scheme`) and
+  degrade gracefully when MTPLX is unreachable (dim + reconnect banner, last values retained) or
+  when the SSE connection itself drops (native `EventSource` auto-reconnect, no custom retry logic
+  needed) — `detail.html` opens its own `EventSource('/api/events')` too, same as the other two.
+  `history.html` is light/dark aware but holds no SSE connection at all — it's a fetch-on-load,
+  manual-refresh page, not a live one.
 
 ## Limitations (by design — it reads `/metrics`, nothing more)
 

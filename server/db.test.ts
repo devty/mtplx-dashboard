@@ -6,6 +6,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createStore, SCHEMA_VERSION } from './db';
 import type { RunInfo, RunRow } from './db';
+import type { MetricsRecord } from './types';
 
 /** Creates a Store backed by a throwaway file, plus an independent read
  *  connection for assertions. A second connection is why this uses a temp file
@@ -148,4 +149,86 @@ test('upsertRun on a disabled store returns null', () => {
   assert.equal(store.currentRunId(), null);
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+const REC: MetricsRecord = {
+  request_id: 'req-1',
+  session_id: 'sess-1',
+  decode_tok_s: 43.8,
+  display_decode_tok_s: 44.1,
+  prefill_tok_s: 411.5,
+  ttft_s: 1.06,
+  request_elapsed_s: 1.26,
+  prompt_tokens: 436,
+  completion_tokens: 9,
+  drafted_by_depth: [10, 6],
+  accepted_by_depth: [8, 2],
+  session_cache_hit: true,
+  ssd_cache_hit: false,
+  cache_source: 'none',
+  request_client_label: 'opencode',
+  request_model: 'mtplx-qwen36',
+  request_reasoning_mode: 'off',
+  request_last_user_preview: 'hello there',
+};
+
+const REQUESTS = 'SELECT * FROM request ORDER BY ts';
+
+test('insertRequest maps fields and precomputes accept_rate', () => {
+  const { store, read, cleanup } = tmpStore();
+  const runId = store.upsertRun(runInfo(100, 1_700_000_000_000), 1_700_000_001_000);
+  store.insertRequest(REC, runId, 1_700_000_002_000);
+
+  const rows = read(REQUESTS);
+  assert.equal(rows.length, 1);
+  const r = rows[0];
+  assert.equal(r.request_id, 'req-1');
+  assert.equal(r.run_id, runId);
+  assert.equal(r.ts, 1_700_000_002_000);
+  assert.equal(r.prompt_tokens, 436);
+  assert.equal(r.drafted, 16);
+  assert.equal(r.accepted, 10);
+  assert.equal(r.accept_rate, 10 / 16);
+  assert.deepEqual(JSON.parse(String(r.drafted_by_depth)), [10, 6]);
+  assert.equal(r.client_label, 'opencode');
+  assert.equal(r.user_preview, 'hello there');
+  cleanup();
+});
+
+test('booleans become 0/1 and absent fields become null', () => {
+  const { store, read, cleanup } = tmpStore();
+  store.insertRequest(REC, null, 1_700_000_002_000);
+  const r = read(REQUESTS)[0];
+  assert.equal(r.session_cache_hit, 1);
+  assert.equal(r.ssd_cache_hit, 0);
+  assert.equal(r.run_id, null);
+  assert.equal(r.bonus_tokens, null);
+  assert.equal(r.verify_calls, null);
+  cleanup();
+});
+
+test('accept_rate is null when nothing was drafted', () => {
+  const { store, read, cleanup } = tmpStore();
+  store.insertRequest({ ...REC, drafted_by_depth: [], accepted_by_depth: [] }, null, 1);
+  assert.equal(read(REQUESTS)[0].accept_rate, null);
+  cleanup();
+});
+
+test('re-inserting the same request_id preserves the original ts', () => {
+  const { store, read, cleanup } = tmpStore();
+  store.insertRequest(REC, null, 1_700_000_002_000);
+  store.insertRequest({ ...REC, prompt_tokens: 999 }, null, 1_700_000_999_000);
+
+  const rows = read(REQUESTS);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].ts, 1_700_000_002_000);
+  assert.equal(rows[0].prompt_tokens, 436);
+  cleanup();
+});
+
+test('a record without a request_id is skipped', () => {
+  const { store, read, cleanup } = tmpStore();
+  store.insertRequest({ session_id: 'x' }, null, 1);
+  assert.equal(read(REQUESTS).length, 0);
+  cleanup();
 });

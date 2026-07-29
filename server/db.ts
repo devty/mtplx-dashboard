@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { MetricsRecord } from './types';
 
 export const SCHEMA_VERSION = 1;
 
@@ -54,6 +55,7 @@ export interface Store {
   status(): PersistStatus;
   upsertRun(info: RunInfo, now: number): number | null;
   currentRunId(): number | null;
+  insertRequest(rec: MetricsRecord, runId: number | null, ts: number): void;
   close(): void;
 }
 
@@ -126,6 +128,31 @@ const DDL = `
   );
   CREATE INDEX IF NOT EXISTS gauge_series_ts ON gauge(series, ts);
 `;
+
+/* node:sqlite accepts only number | string | bigint | null | Uint8Array as bind
+   values — booleans and undefined throw at runtime, so everything is coerced. */
+function num(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+function txt(v: unknown): string | null {
+  return typeof v === 'string' ? v : null;
+}
+function flag(v: unknown): number | null {
+  return typeof v === 'boolean' ? (v ? 1 : 0) : null;
+}
+function jsonArr(v: unknown): string | null {
+  return Array.isArray(v) ? JSON.stringify(v) : null;
+}
+function sumArr(v: unknown): number {
+  return Array.isArray(v) ? v.reduce((a: number, b) => a + (Number(b) || 0), 0) : 0;
+}
+
+/** Identical semantics to sample() in metricsPoller.ts — the live sparkline and
+ *  the stored series must never be able to disagree. */
+export function acceptRate(rec: MetricsRecord): number | null {
+  const drafted = sumArr(rec.drafted_by_depth);
+  return drafted > 0 ? sumArr(rec.accepted_by_depth) / drafted : null;
+}
 
 class SqliteStore implements Store {
   private db: DatabaseSync | null = null;
@@ -218,6 +245,82 @@ class SqliteStore implements Store {
 
   currentRunId(): number | null {
     return this.runId;
+  }
+
+  insertRequest(rec: MetricsRecord, runId: number | null, ts: number): void {
+    if (!this.db) return;
+    const id = txt(rec.request_id);
+    if (!id) return;
+    try {
+      const drafted = sumArr(rec.drafted_by_depth);
+      const accepted = sumArr(rec.accepted_by_depth);
+      /* OR IGNORE, never OR REPLACE: on a dashboard restart MTPLX's recent[]
+         still holds already-stored requests, and REPLACE would overwrite their
+         correct ts with a fresh "just now" stamp. */
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO request (
+             request_id, run_id, ts, session_id,
+             decode_tok_s, display_decode_tok_s, prefill_tok_s, prompt_tps,
+             ttft_s, request_elapsed_s, decode_elapsed_s,
+             prompt_tokens, completion_tokens, context_len, new_prefill_tokens,
+             mtp_depth, drafted, accepted, accept_rate,
+             drafted_by_depth, accepted_by_depth,
+             bonus_tokens, correction_tokens, verify_calls,
+             cache_source, session_cache_hit, cached_tokens, cache_restore_time_s,
+             ssd_cache_hit, ssd_cached_tokens,
+             draft_time_s, verify_forward_time_s, verify_eval_time_s, accept_time_s,
+             client_label, model, reasoning_mode, tool_call_count, user_preview
+           ) VALUES (
+             ?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?, ?,  ?, ?, ?, ?,
+             ?, ?, ?, ?,  ?, ?,  ?, ?, ?,  ?, ?, ?, ?,  ?, ?,
+             ?, ?, ?, ?,  ?, ?, ?, ?, ?
+           )`
+        )
+        .run(
+          id,
+          runId,
+          ts,
+          txt(rec.session_id),
+          num(rec.decode_tok_s),
+          num(rec.display_decode_tok_s),
+          num(rec.prefill_tok_s),
+          num(rec.prompt_tps),
+          num(rec.ttft_s),
+          num(rec.request_elapsed_s),
+          num(rec.decode_elapsed_s),
+          num(rec.prompt_tokens),
+          num(rec.completion_tokens),
+          num(rec.context_len),
+          num(rec.new_prefill_tokens),
+          num(rec.mtp_depth),
+          drafted || null,
+          accepted || null,
+          acceptRate(rec),
+          jsonArr(rec.drafted_by_depth),
+          jsonArr(rec.accepted_by_depth),
+          num(rec.bonus_tokens),
+          num(rec.correction_tokens),
+          num(rec.verify_calls),
+          txt(rec.cache_source),
+          flag(rec.session_cache_hit),
+          num(rec.cached_tokens),
+          num(rec.cache_restore_time_s),
+          flag(rec.ssd_cache_hit),
+          num(rec.ssd_cached_tokens),
+          num(rec.draft_time_s),
+          num(rec.verify_forward_time_s),
+          num(rec.verify_eval_time_s),
+          num(rec.accept_time_s),
+          txt(rec.request_client_label),
+          txt(rec.request_model),
+          txt(rec.request_reasoning_mode),
+          num(rec.tool_call_count),
+          txt(rec.request_last_user_preview)
+        );
+    } catch (err) {
+      this.fail('insertRequest', err);
+    }
   }
 
   close(): void {

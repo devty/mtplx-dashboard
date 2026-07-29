@@ -66,6 +66,8 @@
   - `Store.close(): void`
   - `SCHEMA_VERSION = 1`
 
+**Interface discipline (applies to Tasks 1–5):** the `Store` interface carries ONLY methods with a production caller. It must never gain test-only introspection helpers (`runsForTest`, `requestsForTest`, `tableNames`, `schemaVersion`, or similar). Tests assert against stored state by opening their own second `DatabaseSync` connection to a temp-file database — see the `tmpStore()` helper in Step 2, which every later task reuses. `:memory:` is deliberately NOT used in tests, because an in-memory database is private to its connection and a second connection would see an empty database.
+
 - [ ] **Step 1: Add the test script, engines floor, and build exclusion**
 
 In `package.json`, replace the `scripts` and `engines` blocks:
@@ -103,40 +105,85 @@ Create `server/db.test.ts`:
 ```ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { createStore, SCHEMA_VERSION } from './db';
 
-function memStore(retentionDays = 30) {
-  return createStore({ path: ':memory:', enabled: true, retentionDays });
+/** Creates a Store backed by a throwaway file, plus an independent read
+ *  connection for assertions. A second connection is why this uses a temp file
+ *  rather than ':memory:' — an in-memory database is private to the connection
+ *  that opened it, so a reader would see an empty schema. WAL lets both
+ *  connections coexist. `read` opens read-write because a strictly read-only
+ *  connection cannot create the -shm file WAL needs. */
+function tmpStore(retentionDays = 30) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
+  const file = path.join(dir, 'history.db');
+  const store = createStore({ path: file, enabled: true, retentionDays });
+
+  const read = <T = Record<string, unknown>>(sql: string): T[] => {
+    const db = new DatabaseSync(file);
+    try {
+      return db.prepare(sql).all() as unknown as T[];
+    } finally {
+      db.close();
+    }
+  };
+  const cleanup = () => {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  };
+  return { store, read, file, dir, cleanup };
 }
 
 test('creates the schema and stamps the version', () => {
-  const store = memStore();
+  const { store, read, cleanup } = tmpStore();
   assert.equal(store.status().enabled, true);
   assert.equal(store.status().ok, true);
   assert.equal(store.status().lastError, null);
-  assert.deepEqual(store.tableNames(), ['gauge', 'request', 'run']);
-  assert.equal(store.schemaVersion(), SCHEMA_VERSION);
-  store.close();
+
+  const tables = read<{ name: string }>(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`
+  ).map(r => r.name);
+  assert.deepEqual(tables, ['gauge', 'request', 'run']);
+
+  const [{ user_version }] = read<{ user_version: number }>('PRAGMA user_version');
+  assert.equal(user_version, SCHEMA_VERSION);
+  cleanup();
 });
 
-test('disabled store is inert and reports enabled:false', () => {
-  const store = createStore({ path: ':memory:', enabled: false, retentionDays: 30 });
+test('disabled store is inert and never touches the filesystem', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
+  const file = path.join(dir, 'history.db');
+  const store = createStore({ path: file, enabled: false, retentionDays: 30 });
+
   assert.equal(store.status().enabled, false);
   assert.equal(store.status().ok, true);
-  assert.deepEqual(store.tableNames(), []);
+  assert.equal(fs.existsSync(file), false);
+
   store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('an unopenable path degrades instead of throwing', () => {
+  /* A regular file standing where a directory must be: mkdirSync fails with
+     ENOTDIR on every platform, unlike a permission-based path which depends on
+     who is running the tests. */
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
+  const blocker = path.join(dir, 'not-a-dir');
+  fs.writeFileSync(blocker, 'x');
+
   const store = createStore({
-    path: '/nonexistent-dir-xyz/history.db',
+    path: path.join(blocker, 'history.db'),
     enabled: true,
     retentionDays: 30,
   });
   assert.equal(store.status().ok, false);
   assert.ok(store.status().lastError);
-  assert.deepEqual(store.tableNames(), []);
-  store.close();
+  store.close(); // must not throw on a store that never opened
+
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 ```
 
@@ -157,7 +204,7 @@ import path from 'node:path';
 export const SCHEMA_VERSION = 1;
 
 export interface StoreOptions {
-  /** SQLite file path, or ':memory:' for tests. */
+  /** SQLite file path. Its parent directory is created if missing. */
   path: string;
   enabled: boolean;
   retentionDays: number;
@@ -169,11 +216,10 @@ export interface PersistStatus {
   lastError: string | null;
 }
 
+/** Every method here has a production caller. Test-only introspection belongs
+ *  in the test file's own read connection, not on this interface. */
 export interface Store {
   status(): PersistStatus;
-  /** Sorted table names — introspection used by tests and /api/history debug. */
-  tableNames(): string[];
-  schemaVersion(): number;
   close(): void;
 }
 
@@ -257,9 +303,7 @@ class SqliteStore implements Store {
   constructor(private readonly options: StoreOptions) {
     if (!options.enabled) return;
     try {
-      if (options.path !== ':memory:') {
-        fs.mkdirSync(path.dirname(options.path), { recursive: true });
-      }
+      fs.mkdirSync(path.dirname(options.path), { recursive: true });
       const db = new DatabaseSync(options.path);
       db.exec('PRAGMA journal_mode = WAL');
       db.exec('PRAGMA synchronous = NORMAL');
@@ -285,30 +329,6 @@ class SqliteStore implements Store {
 
   status(): PersistStatus {
     return { enabled: this.options.enabled, ok: this.ok, lastError: this.lastError };
-  }
-
-  tableNames(): string[] {
-    if (!this.db) return [];
-    try {
-      const rows = this.db
-        .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
-        .all() as { name: string }[];
-      return rows.map(r => r.name);
-    } catch (err) {
-      this.fail('tableNames', err);
-      return [];
-    }
-  }
-
-  schemaVersion(): number {
-    if (!this.db) return 0;
-    try {
-      const row = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
-      return row.user_version;
-    } catch (err) {
-      this.fail('schemaVersion', err);
-      return 0;
-    }
   }
 
   close(): void {
@@ -386,13 +406,16 @@ EOF
   - `interface RunInfo { pid: number | null; startedAt: number; model: string | null; runtimeMode: string | null; generationMode: string | null; depth: number | null; verifyCore: string | null; pagedKvQuantization: string | null; contextWindow: number | null; health: string }`
   - `Store.upsertRun(info: RunInfo, now: number): number | null` — returns the run's row id, or `null` when disabled/degraded. Idempotent on `(pid, startedAt)`; stamps `ended_at = now` on any older open run.
   - `Store.currentRunId(): number | null`
+  - `interface RunRow` — the shape of a `run` table row. A type only; no accessor method on `Store`. Tests read rows through `tmpStore()`'s `read` helper.
 
 - [ ] **Step 1: Write the failing test**
 
 Append to `server/db.test.ts`:
 
 ```ts
-import type { RunInfo } from './db';
+import type { RunInfo, RunRow } from './db';
+
+const RUNS = 'SELECT * FROM run ORDER BY id';
 
 function runInfo(pid: number, startedAt: number, over: Partial<RunInfo> = {}): RunInfo {
   return {
@@ -411,46 +434,53 @@ function runInfo(pid: number, startedAt: number, over: Partial<RunInfo> = {}): R
 }
 
 test('upsertRun is idempotent for the same pid and start time', () => {
-  const store = memStore();
+  const { store, read, cleanup } = tmpStore();
   const a = store.upsertRun(runInfo(100, 1_700_000_000_000), 1_700_000_001_000);
   const b = store.upsertRun(runInfo(100, 1_700_000_000_000), 1_700_000_002_000);
   assert.equal(typeof a, 'number');
   assert.equal(b, a);
   assert.equal(store.currentRunId(), a);
-  store.close();
+  assert.equal(read<RunRow>(RUNS).length, 1);
+  cleanup();
 });
 
 test('a new run closes the previous one', () => {
-  const store = memStore();
+  const { store, read, cleanup } = tmpStore();
   const first = store.upsertRun(runInfo(100, 1_700_000_000_000), 1_700_000_001_000);
   const second = store.upsertRun(runInfo(200, 1_700_000_500_000), 1_700_000_501_000);
   assert.notEqual(second, first);
   assert.equal(store.currentRunId(), second);
 
-  const rows = store.runsForTest();
+  const rows = read<RunRow>(RUNS);
   const closed = rows.find(r => r.id === first);
   const open = rows.find(r => r.id === second);
   assert.equal(closed?.ended_at, 1_700_000_501_000);
   assert.equal(open?.ended_at, null);
-  store.close();
+  cleanup();
 });
 
 test('run promotes health columns and keeps the raw JSON', () => {
-  const store = memStore();
+  const { store, read, cleanup } = tmpStore();
   const id = store.upsertRun(runInfo(100, 1_700_000_000_000, { depth: 3 }), 1_700_000_001_000);
-  const row = store.runsForTest().find(r => r.id === id);
+  const row = read<RunRow>(RUNS).find(r => r.id === id);
   assert.equal(row?.depth, 3);
   assert.equal(row?.runtime_mode, 'Sustained Max MTP');
   assert.equal(row?.paged_kv_quantization, 'q8');
   assert.deepEqual(JSON.parse(String(row?.health)), { ok: true });
-  store.close();
+  cleanup();
 });
 
 test('upsertRun on a disabled store returns null', () => {
-  const store = createStore({ path: ':memory:', enabled: false, retentionDays: 30 });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
+  const store = createStore({
+    path: path.join(dir, 'history.db'),
+    enabled: false,
+    retentionDays: 30,
+  });
   assert.equal(store.upsertRun(runInfo(1, 2), 3), null);
   assert.equal(store.currentRunId(), null);
   store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 ```
 
@@ -501,8 +531,6 @@ Add to the `Store` interface:
 ```ts
   upsertRun(info: RunInfo, now: number): number | null;
   currentRunId(): number | null;
-  /** Test-only introspection. */
-  runsForTest(): RunRow[];
 ```
 
 Add to `SqliteStore` a field and the methods:
@@ -563,11 +591,6 @@ Add to `SqliteStore` a field and the methods:
   currentRunId(): number | null {
     return this.runId;
   }
-
-  runsForTest(): RunRow[] {
-    if (!this.db) return [];
-    return this.db.prepare('SELECT * FROM run ORDER BY id').all() as unknown as RunRow[];
-  }
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
@@ -603,7 +626,6 @@ EOF
 - Consumes: `Store`, `RunInfo` from Tasks 1–2; `MetricsRecord` from `server/types.ts`.
 - Produces:
   - `Store.insertRequest(rec: MetricsRecord, runId: number | null, ts: number): void`
-  - `Store.requestsForTest(): Record<string, unknown>[]`
   - `acceptRate(rec: MetricsRecord): number | null` (exported; must match `sample()` in `metricsPoller.ts`)
 
 - [ ] **Step 1: Write the failing test**
@@ -634,12 +656,14 @@ const REC: MetricsRecord = {
   request_last_user_preview: 'hello there',
 };
 
+const REQUESTS = 'SELECT * FROM request ORDER BY ts';
+
 test('insertRequest maps fields and precomputes accept_rate', () => {
-  const store = memStore();
+  const { store, read, cleanup } = tmpStore();
   const runId = store.upsertRun(runInfo(100, 1_700_000_000_000), 1_700_000_001_000);
   store.insertRequest(REC, runId, 1_700_000_002_000);
 
-  const rows = store.requestsForTest();
+  const rows = read(REQUESTS);
   assert.equal(rows.length, 1);
   const r = rows[0];
   assert.equal(r.request_id, 'req-1');
@@ -652,45 +676,45 @@ test('insertRequest maps fields and precomputes accept_rate', () => {
   assert.deepEqual(JSON.parse(String(r.drafted_by_depth)), [10, 6]);
   assert.equal(r.client_label, 'opencode');
   assert.equal(r.user_preview, 'hello there');
-  store.close();
+  cleanup();
 });
 
 test('booleans become 0/1 and absent fields become null', () => {
-  const store = memStore();
+  const { store, read, cleanup } = tmpStore();
   store.insertRequest(REC, null, 1_700_000_002_000);
-  const r = store.requestsForTest()[0];
+  const r = read(REQUESTS)[0];
   assert.equal(r.session_cache_hit, 1);
   assert.equal(r.ssd_cache_hit, 0);
   assert.equal(r.run_id, null);
   assert.equal(r.bonus_tokens, null);
   assert.equal(r.verify_calls, null);
-  store.close();
+  cleanup();
 });
 
 test('accept_rate is null when nothing was drafted', () => {
-  const store = memStore();
+  const { store, read, cleanup } = tmpStore();
   store.insertRequest({ ...REC, drafted_by_depth: [], accepted_by_depth: [] }, null, 1);
-  assert.equal(store.requestsForTest()[0].accept_rate, null);
-  store.close();
+  assert.equal(read(REQUESTS)[0].accept_rate, null);
+  cleanup();
 });
 
 test('re-inserting the same request_id preserves the original ts', () => {
-  const store = memStore();
+  const { store, read, cleanup } = tmpStore();
   store.insertRequest(REC, null, 1_700_000_002_000);
   store.insertRequest({ ...REC, prompt_tokens: 999 }, null, 1_700_000_999_000);
 
-  const rows = store.requestsForTest();
+  const rows = read(REQUESTS);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].ts, 1_700_000_002_000);
   assert.equal(rows[0].prompt_tokens, 436);
-  store.close();
+  cleanup();
 });
 
 test('a record without a request_id is skipped', () => {
-  const store = memStore();
+  const { store, read, cleanup } = tmpStore();
   store.insertRequest({ session_id: 'x' }, null, 1);
-  assert.equal(store.requestsForTest().length, 0);
-  store.close();
+  assert.equal(read(REQUESTS).length, 0);
+  cleanup();
 });
 ```
 
@@ -740,8 +764,6 @@ Add to the `Store` interface:
 
 ```ts
   insertRequest(rec: MetricsRecord, runId: number | null, ts: number): void;
-  /** Test-only introspection. */
-  requestsForTest(): Record<string, unknown>[];
 ```
 
 Add to `SqliteStore`:
@@ -822,14 +844,6 @@ Add to `SqliteStore`:
       this.fail('insertRequest', err);
     }
   }
-
-  requestsForTest(): Record<string, unknown>[] {
-    if (!this.db) return [];
-    return this.db.prepare('SELECT * FROM request ORDER BY ts').all() as unknown as Record<
-      string,
-      unknown
-    >[];
-  }
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
@@ -881,7 +895,7 @@ Append to `server/db.test.ts`:
 import { REQUEST_SERIES } from './db';
 
 test('querySeries buckets request rows and reports bucket starts', () => {
-  const store = memStore();
+  const { store, cleanup } = tmpStore();
   const base = 1_700_000_000_000;
   // two requests in bucket 0, one in bucket 2, over a 4-bucket window
   store.insertRequest({ ...REC, request_id: 'a', display_decode_tok_s: 10 }, null, base + 100);
@@ -894,11 +908,11 @@ test('querySeries buckets request rows and reports bucket starts', () => {
     { ts: base, avg: 15, min: 10, max: 20, n: 2 },
     { ts: base + 2000, avg: 50, min: 50, max: 50, n: 1 },
   ]);
-  store.close();
+  cleanup();
 });
 
 test('decode falls back to decode_tok_s when display is absent', () => {
-  const store = memStore();
+  const { store, cleanup } = tmpStore();
   const base = 1_700_000_000_000;
   store.insertRequest(
     { ...REC, request_id: 'a', display_decode_tok_s: null, decode_tok_s: 7 },
@@ -907,18 +921,18 @@ test('decode falls back to decode_tok_s when display is absent', () => {
   );
   const res = store.querySeries(['decode'], base, base + 1000, 1);
   assert.equal(res.series.decode[0].avg, 7);
-  store.close();
+  cleanup();
 });
 
 test('querySeries rejects names outside the allowlist', () => {
-  const store = memStore();
+  const { store, cleanup } = tmpStore();
   assert.throws(() => store.querySeries(['ttft; DROP TABLE request'], 0, 1000, 1), /unknown series/i);
   assert.deepEqual(Object.keys(REQUEST_SERIES).sort(), ['accept', 'decode', 'prefill', 'ttft']);
-  store.close();
+  cleanup();
 });
 
 test('gauges round-trip through queryGauges', () => {
-  const store = memStore();
+  const { store, cleanup } = tmpStore();
   const base = 1_700_000_000_000;
   store.insertGauge('session_bank_bytes', 100, base + 10);
   store.insertGauge('session_bank_bytes', 300, base + 20);
@@ -928,22 +942,28 @@ test('gauges round-trip through queryGauges', () => {
   assert.deepEqual(res.series.session_bank_bytes, [
     { ts: base, avg: 200, min: 100, max: 300, n: 2 },
   ]);
-  store.close();
+  cleanup();
 });
 
 test('an empty window yields an empty array, not an error', () => {
-  const store = memStore();
+  const { store, cleanup } = tmpStore();
   const res = store.querySeries(['decode', 'ttft'], 0, 1000, 10);
   assert.deepEqual(res.series.decode, []);
   assert.deepEqual(res.series.ttft, []);
-  store.close();
+  cleanup();
 });
 
 test('a disabled store returns empty series', () => {
-  const store = createStore({ path: ':memory:', enabled: false, retentionDays: 30 });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
+  const store = createStore({
+    path: path.join(dir, 'history.db'),
+    enabled: false,
+    retentionDays: 30,
+  });
   const res = store.querySeries(['decode'], 0, 1000, 10);
   assert.deepEqual(res.series.decode, []);
   store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 ```
 
@@ -1122,7 +1142,7 @@ Append to `server/db.test.ts`:
 const DAY = 86_400_000;
 
 test('prune drops rows past the retention cutoff', () => {
-  const store = memStore(1); // 1-day retention
+  const { store, read, cleanup } = tmpStore(1); // 1-day retention
   const now = 1_700_000_000_000;
   store.insertRequest({ ...REC, request_id: 'old' }, null, now - 2 * DAY);
   store.insertRequest({ ...REC, request_id: 'new' }, null, now - 1000);
@@ -1131,35 +1151,35 @@ test('prune drops rows past the retention cutoff', () => {
 
   store.prune(now);
 
-  const ids = store.requestsForTest().map(r => r.request_id);
+  const ids = read(REQUESTS).map(r => r.request_id);
   assert.deepEqual(ids, ['new']);
   const g = store.queryGauges(['active_requests'], now - 3 * DAY, now + 1000, 1);
   assert.equal(g.series.active_requests[0].n, 1);
-  store.close();
+  cleanup();
 });
 
 test('prune keeps the open run but drops old closed runs', () => {
-  const store = memStore(1);
+  const { store, read, cleanup } = tmpStore(1);
   const now = 1_700_000_000_000;
   const old = store.upsertRun(runInfo(1, now - 3 * DAY), now - 3 * DAY);
   const open = store.upsertRun(runInfo(2, now - 1000), now - 1000);
-  assert.equal(store.runsForTest().length, 2);
+  assert.equal(read<RunRow>(RUNS).length, 2);
 
   store.prune(now);
 
-  const ids = store.runsForTest().map(r => r.id);
+  const ids = read<RunRow>(RUNS).map(r => r.id);
   assert.deepEqual(ids, [open]);
   assert.ok(!ids.includes(old as number));
-  store.close();
+  cleanup();
 });
 
 test('retentionDays of 0 prunes everything', () => {
-  const store = memStore(0);
+  const { store, read, cleanup } = tmpStore(0);
   const now = 1_700_000_000_000;
   store.insertRequest({ ...REC, request_id: 'a' }, null, now - 1);
   store.prune(now);
-  assert.equal(store.requestsForTest().length, 0);
-  store.close();
+  assert.equal(read(REQUESTS).length, 0);
+  cleanup();
 });
 ```
 

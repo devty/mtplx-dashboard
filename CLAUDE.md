@@ -56,9 +56,11 @@ override anymore — polling happens once, server-side, not per browser tab.
   `request_id` is also mirrored into SQLite via `store.insertRequest()`, tagged with
   `healthPoller.getCurrentRunId()`. Exports `start()`/`stop()`/`getSnapshot()`.
 - `db.ts` — all SQLite I/O behind a `Store` created by `createStore()`. Owns the v1 schema
-  (`run`/`request`/`gauge`), prepared statements, bucketed range queries, and the prune. Every
-  method catches its own errors and degrades rather than throwing — persistence must never be
-  able to break the live dashboard. Injected into the pollers by `server.ts`, not a global.
+  (`run`/`request`/`gauge`) and the bucketed range queries and prune that run against it; every
+  call does a fresh `db.prepare(...)` rather than hoisting statements (at roughly one write per
+  second this is not worth the added complexity). Every method catches its own errors and
+  degrades rather than throwing — persistence must never be able to break the live dashboard.
+  Injected into the pollers by `server.ts`, not a global.
 - `healthPoller.ts` — low-frequency `/health` loop. Detects MTPLX restarts exactly via
   `startup.pid` + `startup.started_at`, writes `run` rows with the full health JSON, samples the
   request-less gauges, and owns the model string (which is why `metricsPoller` no longer polls

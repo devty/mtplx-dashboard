@@ -81,7 +81,7 @@ let shuttingDown = false;
    window at boot. The shuttingDown guard matters because this chain is not
    cancellable — a signal arriving during that first in-flight /health poll
    would otherwise start the metrics poller after shutdown() had already run. */
-void healthPoller.start(store).then(() => {
+void healthPoller.start(store, () => sse.broadcastTick(poller.getSnapshot())).then(() => {
   if (!shuttingDown) poller.start(store);
 });
 

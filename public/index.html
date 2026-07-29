@@ -420,6 +420,14 @@ let historyRings = { decode: [], prefill: [], ttft: [], accept: [] };
 let historyTimer = null;
 let historyGen = 0; // bumped on every setRange() call; loadHistory() drops stale responses
 
+/* makeSpark() is shared by all four sparks and doesn't know about ranges, so
+   the tooltip reads this instead of threading a per-spark option through
+   every call site: 'req' when each point is one live sample, 'bucket' when
+   rendering a non-live (bucketed) history range. */
+function sparkPointUnit() {
+  return rangeMs === null ? 'req' : 'bucket';
+}
+
 /* ================================================================= utils */
 const $ = s => document.getElementById(s);
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -526,7 +534,8 @@ function makeSpark(el, opts) {
     tip.style.left = (geom.X(i) / geom.w * 100) + '%';
     tip.style.top = (geom.Y(v) / geom.h * 100) + '%';
     const ago = data.length - 1 - i;
-    tip.textContent = opts.format(v) + (ago === 0 ? ' · latest' : ` · ${ago} req ago`);
+    const unit = sparkPointUnit();
+    tip.textContent = opts.format(v) + (ago === 0 ? ' · latest' : ` · ${ago} ${unit}${ago === 1 ? '' : 's'} ago`);
   });
   el.addEventListener('mouseleave', () => {
     tip.style.display = 'none';
@@ -732,11 +741,24 @@ async function loadHistory() {
        for a window the user is no longer looking at. Drop it rather than
        painting it under a button that says something else. */
     if (gen !== historyGen) return;
+    /* One slot per bucket across the whole window, not one slot per returned
+       row — a bucket with no data must render as a gap, not as a seam
+       stitched to its neighbors. Placement uses j.bucketMs/j.from from the
+       RESPONSE so it matches exactly what the server bucketed. */
+    const slots = Math.max(1, Math.ceil((j.to - j.from) / j.bucketMs));
+    const dense = pts => {
+      const out = new Array(slots).fill(null);
+      for (const p of pts || []) {
+        const i = Math.floor((p.ts - j.from) / j.bucketMs);
+        if (i >= 0 && i < slots) out[i] = p.avg;
+      }
+      return out;
+    };
     historyRings = {
-      decode:  (j.series.decode  || []).map(p => p.avg),
-      prefill: (j.series.prefill || []).map(p => p.avg),
-      ttft:    (j.series.ttft    || []).map(p => p.avg),
-      accept:  (j.series.accept  || []).map(p => p.avg),
+      decode:  dense(j.series.decode),
+      prefill: dense(j.series.prefill),
+      ttft:    dense(j.series.ttft),
+      accept:  dense(j.series.accept),
     };
   } catch {
     if (gen !== historyGen) return;

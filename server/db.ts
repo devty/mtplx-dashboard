@@ -54,7 +54,6 @@ export interface RunRow {
 export interface Store {
   status(): PersistStatus;
   upsertRun(info: RunInfo, now: number): number | null;
-  currentRunId(): number | null;
   insertRequest(rec: MetricsRecord, runId: number | null, ts: number): void;
   insertGauge(series: string, value: number | null, ts: number): void;
   querySeries(names: string[], from: number, to: number, buckets: number): SeriesResult;
@@ -131,6 +130,7 @@ const DDL = `
     value  REAL
   );
   CREATE INDEX IF NOT EXISTS gauge_series_ts ON gauge(series, ts);
+  CREATE INDEX IF NOT EXISTS gauge_ts ON gauge(ts);
 `;
 
 /* node:sqlite accepts only number | string | bigint | null | Uint8Array as bind
@@ -190,7 +190,6 @@ class SqliteStore implements Store {
   private lastError: string | null = null;
   /** Failure classes already logged, so a full disk logs once, not per row. */
   private loggedClasses = new Set<string>();
-  private runId: number | null = null;
 
   constructor(private readonly options: StoreOptions) {
     if (!options.enabled) return;
@@ -231,7 +230,6 @@ class SqliteStore implements Store {
         .get(info.pid, info.startedAt) as { id: number } | undefined;
 
       if (existing) {
-        this.runId = existing.id;
         return existing.id;
       }
 
@@ -265,16 +263,11 @@ class SqliteStore implements Store {
       const row = this.db
         .prepare('SELECT id FROM run WHERE pid IS ? AND started_at = ?')
         .get(info.pid, info.startedAt) as { id: number };
-      this.runId = row.id;
       return row.id;
     } catch (err) {
       this.fail('upsertRun', err);
       return null;
     }
-  }
-
-  currentRunId(): number | null {
-    return this.runId;
   }
 
   insertRequest(rec: MetricsRecord, runId: number | null, ts: number): void {

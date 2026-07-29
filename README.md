@@ -132,8 +132,8 @@ mtplx-dashboard/
 │   ├── metricsPoller.ts   Poll loop, retry/backoff, ring/log buffers, change detection,
 │   │                        request-row + tool-parse-gauge persistence
 │   ├── healthPoller.ts    Low-frequency /health loop — run detection, gauges, model chip
-│   ├── db.ts              SQLite persistence: schema, prepared statements, bucketed
-│   │                        range queries, pruning
+│   ├── db.ts              SQLite persistence: schema, writes/queries via node:sqlite,
+│   │                        bucketed range queries, pruning
 │   ├── db.test.ts         node:test unit tests for db.ts (npm test)
 │   ├── sse.ts             SSE client registry, broadcast, heartbeat
 │   ├── config.ts          Env var → config

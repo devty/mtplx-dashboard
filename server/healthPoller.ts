@@ -9,6 +9,10 @@ let runId: number | null = null;
 let model: string | null = null;
 /** `${pid}:${started_at}` of the run currently believed live. */
 let identity: string | null = null;
+/** Invoked exactly when `model` actually changes, so callers (server.ts) can
+ *  push an SSE tick without healthPoller importing metricsPoller/sse itself —
+ *  that would be a real require() cycle under CommonJS. */
+let onModelChange: (() => void) | null = null;
 
 async function fetchWithTimeout(url: string, ms: number): Promise<Response> {
   const ctl = new AbortController();
@@ -51,7 +55,11 @@ async function pollOnce(): Promise<void> {
     const h = (await res.json()) as HealthResponse;
     const now = Date.now();
 
-    model = txt(h.model) ?? model;
+    const newModel = txt(h.model);
+    if (newModel !== null && newModel !== model) {
+      model = newModel;
+      onModelChange?.();
+    }
 
     const info = toRunInfo(h);
     if (info && store) {
@@ -75,9 +83,14 @@ async function pollOnce(): Promise<void> {
 }
 
 /** Resolves after the FIRST poll attempt completes, so server.ts can guarantee
- *  a run exists (when MTPLX is up) before metricsPoller starts writing rows. */
-export async function start(s: Store): Promise<void> {
+ *  a run exists (when MTPLX is up) before metricsPoller starts writing rows.
+ *  `onModelChangeCb`, if given, fires whenever the model string actually
+ *  changes — the model chip otherwise only refreshes on the next
+ *  metrics-driven tick, which can be indefinitely far away if MTPLX sits idle
+ *  after a restart onto a different model. */
+export async function start(s: Store, onModelChangeCb?: () => void): Promise<void> {
   store = s;
+  onModelChange = onModelChangeCb ?? null;
   stopped = false;
   await pollOnce();
 }

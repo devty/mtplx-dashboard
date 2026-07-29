@@ -107,7 +107,6 @@ test('upsertRun is idempotent for the same pid and start time', () => {
   const b = store.upsertRun(runInfo(100, 1_700_000_000_000), 1_700_000_002_000);
   assert.equal(typeof a, 'number');
   assert.equal(b, a);
-  assert.equal(store.currentRunId(), a);
   assert.equal(read<RunRow>(RUNS).length, 1);
   cleanup();
 });
@@ -117,7 +116,6 @@ test('a new run closes the previous one', () => {
   const first = store.upsertRun(runInfo(100, 1_700_000_000_000), 1_700_000_001_000);
   const second = store.upsertRun(runInfo(200, 1_700_000_500_000), 1_700_000_501_000);
   assert.notEqual(second, first);
-  assert.equal(store.currentRunId(), second);
 
   const rows = read<RunRow>(RUNS);
   const closed = rows.find(r => r.id === first);
@@ -146,7 +144,6 @@ test('upsertRun on a disabled store returns null', () => {
     retentionDays: 30,
   });
   assert.equal(store.upsertRun(runInfo(1, 2), 3), null);
-  assert.equal(store.currentRunId(), null);
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });

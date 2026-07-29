@@ -1,3 +1,5 @@
+import type { PersistStatus } from './db';
+
 /** Shape of a single completed request's metrics, as reported by MTPLX's
  *  /metrics endpoint. Fields are optional/nullable throughout because
  *  renderers on the client already no-op gracefully on missing data, and
@@ -66,6 +68,25 @@ export interface MtplxMetricsResponse {
   tool_parse_counters?: ToolParseCounters;
 }
 
+/** The subset of MTPLX's /health this server reads. The endpoint returns far
+ *  more (env ablation flags, thermal, scheduler); the full body is archived
+ *  verbatim on the `run` row rather than typed out here. */
+export interface HealthResponse {
+  model?: string | null;
+  runtime_mode?: string | null;
+  generation_mode?: string | null;
+  depth?: number | null;
+  verify_core?: string | null;
+  paged_kv_quantization?: string | null;
+  context_window?: number | null;
+  active_requests?: number | null;
+  requests_completed?: number | null;
+  /** started_at is float SECONDS here, unlike every stored timestamp. */
+  startup?: { pid?: number | null; started_at?: number | null };
+  session_bank?: { max_entries?: number | null; max_bytes?: number | null; [k: string]: unknown };
+  [key: string]: unknown;
+}
+
 export interface RingBuffers {
   decode: (number | null)[];
   prefill: (number | null)[];
@@ -96,4 +117,5 @@ export interface StatePayload {
   };
   ringSize: number;
   logBufferSize: number;
+  persist: PersistStatus;
 }

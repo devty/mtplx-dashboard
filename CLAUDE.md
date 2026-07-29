@@ -30,12 +30,15 @@ npm run build && npm start   # production: compile once, run plain node
 npm run typecheck             # tsc --noEmit
 ```
 
-No automated test suite — verify changes by loading the pages against a real or mocked MTPLX
-`/metrics` (and `/v1/models`) endpoint in a browser. The server polls a single configured MTPLX
-target via `MTPLX_URL` (default `http://127.0.0.1:8000`); see `.env.example` / README for the
-full list of env vars (`PORT`, `POLL_INTERVAL_MS`, `MTPLX_TIMEOUT_MS`, `RING_SIZE`,
-`LOG_BUFFER_SIZE`, `MAX_BACKOFF_MS`). There is no `?server=` query-param override anymore —
-polling happens once, server-side, not per browser tab.
+`npm test` runs `node:test` unit tests for `server/db.ts` against a throwaway on-disk SQLite file
+in a temp directory — not `:memory:`, because an in-memory database is private to the connection
+that opened it and the tests assert through a second read connection. Everything else is still
+verified by loading the pages against a real MTPLX — there is no frontend test harness. The server
+polls a single configured MTPLX target via `MTPLX_URL` (default `http://127.0.0.1:8000`); see
+`.env.example` / README for the full list of env vars (`PORT`, `POLL_INTERVAL_MS`,
+`MTPLX_TIMEOUT_MS`, `RING_SIZE`, `LOG_BUFFER_SIZE`, `MAX_BACKOFF_MS`, `DB_PATH`, `PERSIST_ENABLED`,
+`RETENTION_DAYS`, `PRUNE_INTERVAL_MS`, `HEALTH_INTERVAL_MS`). There is no `?server=` query-param
+override anymore — polling happens once, server-side, not per browser tab.
 
 ## Architecture
 
@@ -48,14 +51,31 @@ polling happens once, server-side, not per browser tab.
   `setTimeout` (not `setInterval`, so the delay can grow under failure and shrink back on
   success — this is the retry/backoff mechanism, capped at `MAX_BACKOFF_MS`). Owns the
   server-side ring buffers and log buffer (see below), the `sig()`-based change detection, and
-  `connected`/`lastOkAt`/`lastChangeAt` state. A second, independent low-frequency loop polls
-  `/v1/models` for the model chip. Exports `start()`/`stop()`/`getSnapshot()`.
+  `connected`/`lastOkAt`/`lastChangeAt` state. It no longer polls `/v1/models` itself — the model
+  string it reports in `getSnapshot()` comes from `healthPoller.getModel()`. Every first-seen
+  `request_id` is also mirrored into SQLite via `store.insertRequest()`, tagged with
+  `healthPoller.getCurrentRunId()`. Exports `start()`/`stop()`/`getSnapshot()`.
+- `db.ts` — all SQLite I/O behind a `Store` created by `createStore()`. Owns the v1 schema
+  (`run`/`request`/`gauge`) and the bucketed range queries and prune that run against it; every
+  call does a fresh `db.prepare(...)` rather than hoisting statements (at roughly one write per
+  second this is not worth the added complexity). Every method catches its own errors and
+  degrades rather than throwing — persistence must never be able to break the live dashboard.
+  Injected into the pollers by `server.ts`, not a global.
+- `healthPoller.ts` — low-frequency `/health` loop. Detects MTPLX restarts exactly via
+  `startup.pid` + `startup.started_at`, writes `run` rows with the full health JSON, samples the
+  request-less gauges, and owns the model string (which is why `metricsPoller` no longer polls
+  `/v1/models`).
 - `sse.ts` — tracks connected `Response` objects in a `Set`, writes `snapshot`/`tick` SSE events,
   and a 20s heartbeat comment so idle connections aren't reaped by any intermediary.
 - `server.ts` — Express app: serves `public/` statically, `GET /api/events` (SSE — sends one
   `snapshot` on connect, then relies on `metricsPoller` to `broadcastTick()` on change),
   `GET /api/metrics` (plain JSON snapshot, debug/convenience only — no client code depends on it),
-  and graceful `SIGINT`/`SIGTERM` shutdown.
+  `GET /api/history/series` and `GET /api/history/gauges` (bucketed history reads off `db.ts`,
+  rejecting unknown series names in `/api/history/series` with HTTP 400 via `Object.hasOwn` —
+  deliberately not the `in` operator, which walks the prototype chain), and graceful
+  `SIGINT`/`SIGTERM` shutdown gated by a `shuttingDown` flag so the startup promise chain
+  (`healthPoller.start().then(() => poller.start())`) can't start the metrics poller after
+  shutdown has already begun.
 
 ### Data model
 MTPLX's `/metrics` response (`MtplxMetricsResponse`) is unchanged upstream:
@@ -81,6 +101,17 @@ not just MTPLX's last-32:
 On the client, `public/log.html`'s `seen`/`order` are now just a local mirror of "what's already
 rendered" (so `render()` only inserts new DOM nodes and open detail-drawers survive) — the actual
 dedup/trim happens in `ingestLog()` server-side.
+
+### SQLite persistence
+The in-memory ring/log buffers are still the live path; SQLite is the durable one. `request` holds
+one row per completed request (numbers plus cheap attribution text — never prompt/response
+bodies), `run` holds one row per detected MTPLX run with its `/health` config snapshot, and
+`gauge` holds only the series that have no owning request (`session_bank_*`, `active_requests`,
+`requests_completed`, `tool_parse_*`). Sparkline series are NOT stored as gauges — they are
+derived from `request` on read via `REQUEST_SERIES`, whose expressions mirror `sample()` exactly
+so live and historical values cannot drift. Writes use `INSERT OR IGNORE` on `request_id`:
+MTPLX's `recent[]` replays already-stored requests after a dashboard restart, and `OR REPLACE`
+would overwrite their correct `ts`.
 
 ### Change detection
 `sig()` in `metricsPoller.ts` (session_id + elapsed + token counts + ttft) detects whether
@@ -136,3 +167,10 @@ UI on both pages:
 - `StatePayload` (`server/types.ts`) is sent in full on every `snapshot`/`tick` — not diffed. Keep
   it that way unless payload size actually becomes a problem; diffing is not worth the complexity
   at this project's scale (broadcasts only happen on genuine change, not every poll tick).
+- All sparkline data in `index.html` flows through `renderSparks()`, which reads `activeRings()`
+  (live `rings` vs `historyRings`, picked by whether `rangeMs` is set) and is the only call site of
+  `sparks.decode/prefill/ttft/accept.render()`. Never call `sparks.*.render()` directly from a
+  render function or from `applyPayload()` — `applyPayload()` correctly calls `renderSparks()`
+  rather than rendering `rings` itself, and that indirection is load-bearing: a direct call bypasses
+  the range selector, so an incoming SSE `tick` would silently overwrite a user's selected
+  historical range with live ring data, with no error and nothing obviously wrong in review.

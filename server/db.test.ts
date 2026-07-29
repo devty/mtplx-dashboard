@@ -269,6 +269,10 @@ test('querySeries rejects names outside the allowlist', () => {
   const { store, cleanup } = tmpStore();
   assert.throws(() => store.querySeries(['ttft; DROP TABLE request'], 0, 1000, 1), /unknown series/i);
   assert.deepEqual(Object.keys(REQUEST_SERIES).sort(), ['accept', 'decode', 'prefill', 'ttft']);
+  for (const evil of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+    assert.throws(() => store.querySeries([evil], 0, 1000, 1), /unknown series/i);
+  }
+  assert.equal(store.status().ok, true); // a rejected name must not degrade store health
   cleanup();
 });
 

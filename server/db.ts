@@ -371,7 +371,7 @@ class SqliteStore implements Store {
     const bucketMs = this.bucketMs(from, to, buckets);
     const series: Record<string, SeriesPoint[]> = {};
     for (const name of names) {
-      const expr = REQUEST_SERIES[name];
+      const expr = Object.hasOwn(REQUEST_SERIES, name) ? REQUEST_SERIES[name] : undefined;
       if (!expr) throw new Error(`unknown series: ${name}`);
       series[name] = this.bucketQuery(
         `SELECT CAST((ts - ?) / ? AS INTEGER) AS b,

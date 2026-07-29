@@ -34,16 +34,23 @@ const server = app.listen(config.port, () => {
   console.log(`mtplx-dashboard listening on :${config.port}, polling ${config.mtplxUrl}`);
 });
 
+let shuttingDown = false;
+
 /* healthPoller first and awaited: its first poll establishes the run that
    metricsPoller tags every request row with, so there is no nullable-run
-   window at boot. */
-void healthPoller.start(store).then(() => poller.start(store));
+   window at boot. The shuttingDown guard matters because this chain is not
+   cancellable — a signal arriving during that first in-flight /health poll
+   would otherwise start the metrics poller after shutdown() had already run. */
+void healthPoller.start(store).then(() => {
+  if (!shuttingDown) poller.start(store);
+});
 
 const heartbeat = sse.startHeartbeat();
 const pruneTimer = setInterval(() => store.prune(Date.now()), config.pruneIntervalMs);
 store.prune(Date.now()); // one prune at boot, so a long downtime is cleaned up immediately
 
 function shutdown(): void {
+  shuttingDown = true;
   clearInterval(heartbeat);
   clearInterval(pruneTimer);
   poller.stop();

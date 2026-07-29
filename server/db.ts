@@ -17,10 +17,43 @@ export interface PersistStatus {
   lastError: string | null;
 }
 
+export interface RunInfo {
+  pid: number | null;
+  /** Integer ms. Callers convert /health's float-seconds started_at. */
+  startedAt: number;
+  model: string | null;
+  runtimeMode: string | null;
+  generationMode: string | null;
+  depth: number | null;
+  verifyCore: string | null;
+  pagedKvQuantization: string | null;
+  contextWindow: number | null;
+  /** Raw /health JSON as returned at run start. */
+  health: string;
+}
+
+export interface RunRow {
+  id: number;
+  started_at: number;
+  detected_at: number;
+  ended_at: number | null;
+  pid: number | null;
+  model: string | null;
+  runtime_mode: string | null;
+  generation_mode: string | null;
+  depth: number | null;
+  verify_core: string | null;
+  paged_kv_quantization: string | null;
+  context_window: number | null;
+  health: string;
+}
+
 /** Every method here has a production caller. Test-only introspection belongs
  *  in the test file's own read connection, not on this interface. */
 export interface Store {
   status(): PersistStatus;
+  upsertRun(info: RunInfo, now: number): number | null;
+  currentRunId(): number | null;
   close(): void;
 }
 
@@ -100,6 +133,7 @@ class SqliteStore implements Store {
   private lastError: string | null = null;
   /** Failure classes already logged, so a full disk logs once, not per row. */
   private loggedClasses = new Set<string>();
+  private runId: number | null = null;
 
   constructor(private readonly options: StoreOptions) {
     if (!options.enabled) return;
@@ -130,6 +164,60 @@ class SqliteStore implements Store {
 
   status(): PersistStatus {
     return { enabled: this.options.enabled, ok: this.ok, lastError: this.lastError };
+  }
+
+  upsertRun(info: RunInfo, now: number): number | null {
+    if (!this.db) return null;
+    try {
+      const existing = this.db
+        .prepare('SELECT id FROM run WHERE pid IS ? AND started_at = ?')
+        .get(info.pid, info.startedAt) as { id: number } | undefined;
+
+      if (existing) {
+        this.runId = existing.id;
+        return existing.id;
+      }
+
+      /* Close every run still open — a fresh identity means they are all over.
+         Guarded on started_at so an out-of-order poll can't close a newer run. */
+      this.db
+        .prepare('UPDATE run SET ended_at = ? WHERE ended_at IS NULL AND started_at < ?')
+        .run(now, info.startedAt);
+
+      this.db
+        .prepare(
+          `INSERT INTO run (started_at, detected_at, ended_at, pid, model, runtime_mode,
+                            generation_mode, depth, verify_core, paged_kv_quantization,
+                            context_window, health)
+           VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          info.startedAt,
+          now,
+          info.pid,
+          info.model,
+          info.runtimeMode,
+          info.generationMode,
+          info.depth,
+          info.verifyCore,
+          info.pagedKvQuantization,
+          info.contextWindow,
+          info.health
+        );
+
+      const row = this.db
+        .prepare('SELECT id FROM run WHERE pid IS ? AND started_at = ?')
+        .get(info.pid, info.startedAt) as { id: number };
+      this.runId = row.id;
+      return row.id;
+    } catch (err) {
+      this.fail('upsertRun', err);
+      return null;
+    }
+  }
+
+  currentRunId(): number | null {
+    return this.runId;
   }
 
   close(): void {

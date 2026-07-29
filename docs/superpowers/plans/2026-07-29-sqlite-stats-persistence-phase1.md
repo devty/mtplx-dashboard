@@ -1745,7 +1745,12 @@ app.get('/api/history/series', (req, res) => {
     req.query as Record<string, unknown>,
     Object.keys(REQUEST_SERIES)
   );
-  const unknown = names.filter(n => !(n in REQUEST_SERIES));
+  /* Object.hasOwn, not `n in REQUEST_SERIES`: the `in` operator walks the
+     prototype chain, so 'constructor'/'toString'/'__proto__' would pass this
+     filter, reach querySeries, and be rejected there by its own Object.hasOwn
+     guard — but as an unhandled throw escaping Express as a 500 instead of the
+     400 this endpoint is supposed to return. */
+  const unknown = names.filter(n => !Object.hasOwn(REQUEST_SERIES, n));
   if (unknown.length) {
     res.status(400).json({
       error: `unknown series: ${unknown.join(', ')}`,

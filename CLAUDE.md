@@ -6,25 +6,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A realtime dashboard for a local MTPLX inference server (MTP/speculative-decoding LLM inference
 on Apple Silicon). A small Node/TypeScript server (`server/`) polls MTPLX's `/metrics` endpoint
-itself on an interval and pushes updates to connected browsers over Server-Sent Events. The two
+itself on an interval and pushes updates to connected browsers over Server-Sent Events. The four
 pages remain plain, framework-free HTML/CSS/JS with everything inline:
 
 - `public/index.html` — metrics dashboard (speculative-decoding hero stats, throughput, latency,
   context, verify-time breakdown, KV cache, tool-call parse health)
 - `public/log.html` — live activity log (one row per completed request, expandable detail drawer)
+- `public/detail.html` — standalone single-request detail page, reached via a permalink from the
+  log's detail drawer
+- `public/history.html` — run history & comparison (per-run aggregates, config diff, gauge charts)
 
-Both pages connect to the same `GET /api/events` SSE endpoint on this server and render off a
-shared `StatePayload` shape (see `server/types.ts`) — but there is still no shared JS *file*
-between them, so rendering/formatting logic (not data acquisition — see below) remains
-hand-duplicated into both files.
+`index.html`, `log.html`, and `detail.html` connect to the same `GET /api/events` SSE endpoint on
+this server and render off a shared `StatePayload` shape (see `server/types.ts`); `history.html`
+is fetch-on-load only and holds no SSE connection (see Connection/offline handling below). There
+is still no shared JS *file* between any of the four pages, so rendering/formatting logic (not
+data acquisition — see below) remains hand-duplicated across them.
 
 ## Running / testing
 
 ```bash
 npm install
 npm run dev              # tsx watch server/server.ts — auto-restarts on change
-# http://127.0.0.1:8123/          → dashboard
-# http://127.0.0.1:8123/log.html  → live log
+# http://127.0.0.1:8123/              → dashboard
+# http://127.0.0.1:8123/log.html      → live log
+# http://127.0.0.1:8123/history.html  → run history & comparison
 
 npm run build && npm start   # production: compile once, run plain node
 npm run typecheck             # tsc --noEmit

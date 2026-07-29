@@ -1,10 +1,10 @@
 # MTPLX Dashboard
 
-A beautiful realtime dashboard and live activity log for a local
+A beautiful realtime dashboard, live activity log, and run-comparison view for a local
 [MTPLX](https://mtplx.com) inference server. A small Node/TypeScript server polls MTPLX's
-`/metrics` endpoint itself and pushes updates to the browser over Server-Sent Events — the two
-pages (`public/index.html`, `public/log.html`) stay plain HTML/CSS/JS, no client framework, no
-build step for the frontend.
+`/metrics` endpoint itself and pushes updates to the browser over Server-Sent Events — all four
+pages (`public/index.html`, `public/log.html`, `public/detail.html`, `public/history.html`) stay
+plain HTML/CSS/JS, no client framework, no build step for the frontend.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 

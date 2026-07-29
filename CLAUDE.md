@@ -30,13 +30,15 @@ npm run build && npm start   # production: compile once, run plain node
 npm run typecheck             # tsc --noEmit
 ```
 
-`npm test` runs `node:test` unit tests for `server/db.ts` against an in-memory SQLite database.
-Everything else is still verified by loading the pages against a real MTPLX — there is no
-frontend test harness. The server polls a single configured MTPLX target via `MTPLX_URL` (default
-`http://127.0.0.1:8000`); see `.env.example` / README for the full list of env vars (`PORT`,
-`POLL_INTERVAL_MS`, `MTPLX_TIMEOUT_MS`, `RING_SIZE`, `LOG_BUFFER_SIZE`, `MAX_BACKOFF_MS`, `DB_PATH`,
-`PERSIST_ENABLED`, `RETENTION_DAYS`, `PRUNE_INTERVAL_MS`, `HEALTH_INTERVAL_MS`). There is no
-`?server=` query-param override anymore — polling happens once, server-side, not per browser tab.
+`npm test` runs `node:test` unit tests for `server/db.ts` against a throwaway on-disk SQLite file
+in a temp directory — not `:memory:`, because an in-memory database is private to the connection
+that opened it and the tests assert through a second read connection. Everything else is still
+verified by loading the pages against a real MTPLX — there is no frontend test harness. The server
+polls a single configured MTPLX target via `MTPLX_URL` (default `http://127.0.0.1:8000`); see
+`.env.example` / README for the full list of env vars (`PORT`, `POLL_INTERVAL_MS`,
+`MTPLX_TIMEOUT_MS`, `RING_SIZE`, `LOG_BUFFER_SIZE`, `MAX_BACKOFF_MS`, `DB_PATH`, `PERSIST_ENABLED`,
+`RETENTION_DAYS`, `PRUNE_INTERVAL_MS`, `HEALTH_INTERVAL_MS`). There is no `?server=` query-param
+override anymore — polling happens once, server-side, not per browser tab.
 
 ## Architecture
 
@@ -163,3 +165,10 @@ UI on both pages:
 - `StatePayload` (`server/types.ts`) is sent in full on every `snapshot`/`tick` — not diffed. Keep
   it that way unless payload size actually becomes a problem; diffing is not worth the complexity
   at this project's scale (broadcasts only happen on genuine change, not every poll tick).
+- All sparkline data in `index.html` flows through `renderSparks()`, which reads `activeRings()`
+  (live `rings` vs `historyRings`, picked by whether `rangeMs` is set) and is the only call site of
+  `sparks.decode/prefill/ttft/accept.render()`. Never call `sparks.*.render()` directly from a
+  render function or from `applyPayload()` — `applyPayload()` correctly calls `renderSparks()`
+  rather than rendering `rings` itself, and that indirection is load-bearing: a direct call bypasses
+  the range selector, so an incoming SSE `tick` would silently overwrite a user's selected
+  historical range with live ring data, with no error and nothing obviously wrong in review.

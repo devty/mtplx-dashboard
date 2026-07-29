@@ -92,8 +92,10 @@ npm start
 ```
 
 `npm test` runs the `node:test` unit tests for the SQLite persistence layer (`server/db.ts`)
-against an in-memory database — there is no frontend test harness; verify page changes by loading
-them against a real MTPLX instead.
+against a throwaway on-disk SQLite file in a temp directory — not `:memory:`, because an
+in-memory database is private to the connection that opened it and the tests assert through a
+second read connection. There is no frontend test harness; verify page changes by loading them
+against a real MTPLX instead.
 
 ### Configuration
 

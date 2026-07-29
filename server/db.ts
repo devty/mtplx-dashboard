@@ -59,6 +59,7 @@ export interface Store {
   insertGauge(series: string, value: number | null, ts: number): void;
   querySeries(names: string[], from: number, to: number, buckets: number): SeriesResult;
   queryGauges(names: string[], from: number, to: number, buckets: number): SeriesResult;
+  prune(now: number): void;
   close(): void;
 }
 
@@ -431,6 +432,20 @@ class SqliteStore implements Store {
     } catch (err) {
       this.fail('bucketQuery', err);
       return [];
+    }
+  }
+
+  prune(now: number): void {
+    if (!this.db) return;
+    const cutoff = now - this.options.retentionDays * 86_400_000;
+    try {
+      this.db.prepare('DELETE FROM request WHERE ts < ?').run(cutoff);
+      this.db.prepare('DELETE FROM gauge WHERE ts < ?').run(cutoff);
+      /* Only closed runs are eligible — the open run must survive regardless of
+         age, since live requests still reference it. */
+      this.db.prepare('DELETE FROM run WHERE ended_at IS NOT NULL AND ended_at < ?').run(cutoff);
+    } catch (err) {
+      this.fail('prune', err);
     }
   }
 

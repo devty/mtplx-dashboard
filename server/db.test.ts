@@ -310,3 +310,46 @@ test('a disabled store returns empty series', () => {
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+const DAY = 86_400_000;
+
+test('prune drops rows past the retention cutoff', () => {
+  const { store, read, cleanup } = tmpStore(1); // 1-day retention
+  const now = 1_700_000_000_000;
+  store.insertRequest({ ...REC, request_id: 'old' }, null, now - 2 * DAY);
+  store.insertRequest({ ...REC, request_id: 'new' }, null, now - 1000);
+  store.insertGauge('active_requests', 1, now - 2 * DAY);
+  store.insertGauge('active_requests', 2, now - 1000);
+
+  store.prune(now);
+
+  const ids = read(REQUESTS).map(r => r.request_id);
+  assert.deepEqual(ids, ['new']);
+  const g = store.queryGauges(['active_requests'], now - 3 * DAY, now + 1000, 1);
+  assert.equal(g.series.active_requests[0].n, 1);
+  cleanup();
+});
+
+test('prune keeps the open run but drops old closed runs', () => {
+  const { store, read, cleanup } = tmpStore(1);
+  const now = 1_700_000_000_000;
+  const old = store.upsertRun(runInfo(1, now - 3 * DAY), now - 3 * DAY);
+  const open = store.upsertRun(runInfo(2, now - 1000), now - 2 * DAY);
+  assert.equal(read<RunRow>(RUNS).length, 2);
+
+  store.prune(now);
+
+  const ids = read<RunRow>(RUNS).map(r => r.id);
+  assert.deepEqual(ids, [open]);
+  assert.ok(!ids.includes(old as number));
+  cleanup();
+});
+
+test('retentionDays of 0 prunes everything', () => {
+  const { store, read, cleanup } = tmpStore(0);
+  const now = 1_700_000_000_000;
+  store.insertRequest({ ...REC, request_id: 'a' }, null, now - 1);
+  store.prune(now);
+  assert.equal(read(REQUESTS).length, 0);
+  cleanup();
+});

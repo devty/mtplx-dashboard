@@ -1342,12 +1342,18 @@ In the "How it works" section, change:
 ```
 to:
 ```markdown
-- `index.html` and `log.html` are light/dark aware (`prefers-color-scheme`) and degrade gracefully
-  when MTPLX is unreachable (dim + reconnect banner, last values retained) or when the SSE
-  connection itself drops (native `EventSource` auto-reconnect, no custom retry logic needed).
-  `detail.html` and `history.html` are light/dark aware too, but neither holds an SSE connection —
-  `history.html` in particular is a fetch-on-load, manual-refresh page, not a live one.
+- `index.html`, `log.html`, and `detail.html` are light/dark aware (`prefers-color-scheme`) and
+  degrade gracefully when MTPLX is unreachable (dim + reconnect banner, last values retained) or
+  when the SSE connection itself drops (native `EventSource` auto-reconnect, no custom retry logic
+  needed) — `detail.html` opens its own `EventSource('/api/events')` too, same as the other two.
+  `history.html` is light/dark aware but holds no SSE connection at all — it's a fetch-on-load,
+  manual-refresh page, not a live one.
 ```
+
+Note: an earlier draft of this instruction incorrectly grouped `detail.html` with `history.html` as
+having no SSE connection. Verify against `public/detail.html` before writing this edit —
+`grep -n "EventSource" public/detail.html` must show it opening one, confirming it belongs with
+`index.html`/`log.html` here, not with `history.html`.
 
 - [ ] **Step 2: Update `CLAUDE.md`**
 
@@ -1430,7 +1436,23 @@ Layout is a 12-column CSS grid of `.card` elements with `span` modifier classes 
 and 680px.
 ```
 
-In the `### Connection/offline handling` section, add a sentence after the existing two-point list (after the line ending "...once healthy."):
+In the `### Connection/offline handling` section, change the intro line:
+```markdown
+### Connection/offline handling
+Two distinct failure modes map onto the same `body.disconnected` class / `#banner` / `.dot.offline`
+UI on both pages:
+```
+to (the pre-existing "both pages" wording already understated this before Phase 2 — `detail.html`
+has carried the identical pattern since Phase 1; confirm with
+`grep -l "dot.offline\|class=\"dot" public/index.html public/log.html public/detail.html` before
+writing this edit — it should list all three):
+```markdown
+### Connection/offline handling
+Two distinct failure modes map onto the same `body.disconnected` class / `#banner` /
+`.dot.offline` UI on `index.html`, `log.html`, and `detail.html`:
+```
+
+Then add a sentence after the existing two-point list (after the line ending "...once healthy."):
 ```markdown
 
 `history.html` participates in neither: it holds no SSE connection at all, so there is no

@@ -210,6 +210,14 @@ h2 {
 .spark.tall { height: 74px; }
 .spark-cap { font-size: 11px; color: var(--muted); margin-top: 3px; }
 
+.range-sel { display: inline-flex; gap: 2px; border: 1px solid var(--border); border-radius: 6px; padding: 2px; }
+.range-sel button {
+  font: inherit; font-size: 11px; line-height: 1; padding: 4px 7px; cursor: pointer;
+  background: transparent; color: var(--muted); border: 0; border-radius: 4px;
+}
+.range-sel button:hover { color: var(--ink-2); }
+.range-sel button.active { background: var(--s1); color: #fff; }
+
 /* ---------------------------------------------------------------- meters */
 .meter { position: relative; height: 14px; border-radius: 4px; background: var(--blue-track); overflow: hidden; margin-top: 10px; }
 .meter i { position: absolute; inset: 0 auto 0 0; background: var(--s1); border-radius: 4px 0 0 4px; min-width: 2px; transition: width 0.45s; }
@@ -257,6 +265,13 @@ footer code { font: 11px ui-monospace, Menlo, monospace; }
     </nav>
     <div class="model-chip" id="model-chip">model: —</div>
     <div class="head-right">
+      <span class="range-sel" id="range-sel">
+        <button type="button" data-range="live" class="active">live</button>
+        <button type="button" data-range="3600000">1h</button>
+        <button type="button" data-range="86400000">24h</button>
+        <button type="button" data-range="604800000">7d</button>
+      </span>
+      <span class="sep">·</span>
       <span class="status-pill"><span class="dot" id="status-dot"></span><span id="status-text">connecting</span></span>
       <span class="sep">·</span>
       <span>last request <b id="last-req">—</b></span>
@@ -388,6 +403,7 @@ footer code { font: 11px ui-monospace, Menlo, monospace; }
    polling MTPLX server-side (see server/metricsPoller.ts) — no more ?server=
    override or per-tab polling here. */
 const CTX_MAX = 262144;
+const CTX_BUCKETS = 240; // spark resolution for non-live ranges
 const ACTIVE_WINDOW = 5000; // ms after a change we call the server "active"
 
 /* ================================================================= state
@@ -396,6 +412,12 @@ let rings = { decode: [], prefill: [], ttft: [], accept: [] };
 let lastChangeAt = null;
 let lastOkAt = null;
 let connected = false;
+
+/* null = live (render the server's in-memory rings); a number = window width in
+   ms, rendered from bucketed history via /api/history/series. */
+let rangeMs = null;
+let historyRings = { decode: [], prefill: [], ttft: [], accept: [] };
+let historyTimer = null;
 
 /* ================================================================= utils */
 const $ = s => document.getElementById(s);
@@ -569,27 +591,17 @@ function renderHero(m) {
       </div>`;
   }
   box.innerHTML = html || '<div class="mini-note">no speculative data yet</div>';
-
-  sparks.accept.render(rings.accept);
-  const vals = rings.accept.filter(v => v != null);
-  if (vals.length) {
-    $('spark-accept-cap').textContent =
-      `last ${vals.length} requests · min ${fmt(Math.min(...vals) * 100, 0)}% · max ${fmt(Math.max(...vals) * 100, 0)}%`;
-  }
 }
 
 function renderThroughput(m) {
   $('t-decode').textContent  = fmt(m.display_decode_tok_s ?? m.decode_tok_s, 1);
   $('t-prefill').textContent = fmt(m.prefill_tok_s ?? m.prompt_tps, 0);
-  sparks.decode.render(rings.decode);
-  sparks.prefill.render(rings.prefill);
 }
 
 function renderLatency(m) {
   $('l-ttft').textContent  = fmt(m.ttft_s, 2);
   $('l-decode').textContent = fmtSec(m.decode_elapsed_s);
   $('l-total').textContent  = fmtSec(m.request_elapsed_s);
-  sparks.ttft.render(rings.ttft);
 }
 
 function renderContext(m) {
@@ -701,6 +713,69 @@ function renderStatus() {
   $('updated').textContent = lastOkAt ? clock(new Date(lastOkAt)) : '—';
 }
 
+/* ================================================================= history
+   For non-live ranges the sparklines render bucketed averages from SQLite
+   instead of the server's in-memory ring. Same spark widgets, same formatters
+   — only the array they're handed changes. */
+async function loadHistory() {
+  if (rangeMs === null) return;
+  const to = Date.now(), from = to - rangeMs;
+  try {
+    const r = await fetch(
+      `/api/history/series?names=decode,prefill,ttft,accept&from=${from}&to=${to}&buckets=${CTX_BUCKETS}`
+    );
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    historyRings = {
+      decode:  (j.series.decode  || []).map(p => p.avg),
+      prefill: (j.series.prefill || []).map(p => p.avg),
+      ttft:    (j.series.ttft    || []).map(p => p.avg),
+      accept:  (j.series.accept  || []).map(p => p.avg),
+    };
+  } catch {
+    historyRings = { decode: [], prefill: [], ttft: [], accept: [] };
+  }
+  renderSparks();
+}
+
+/* The one place that decides which array the sparklines see. */
+function activeRings() {
+  return rangeMs === null ? rings : historyRings;
+}
+
+function renderSparks() {
+  const r = activeRings();
+  sparks.decode.render(r.decode);
+  sparks.prefill.render(r.prefill);
+  sparks.ttft.render(r.ttft);
+  sparks.accept.render(r.accept);
+  const vals = r.accept.filter(v => v != null);
+  $('spark-accept-cap').textContent = vals.length
+    ? fmt((vals.reduce((a, b) => a + b, 0) / vals.length) * 100, 1) + '% mean over ' +
+      vals.length + (rangeMs === null ? ' requests' : ' buckets')
+    : '—';
+}
+
+function setRange(value) {
+  rangeMs = value === 'live' ? null : Number(value);
+  for (const b of $('range-sel').querySelectorAll('button')) {
+    b.classList.toggle('active', b.dataset.range === value);
+  }
+  clearInterval(historyTimer);
+  historyTimer = null;
+  if (rangeMs === null) {
+    renderSparks();
+  } else {
+    loadHistory();
+    historyTimer = setInterval(loadHistory, 30000);
+  }
+}
+
+$('range-sel').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (b) setRange(b.dataset.range);
+});
+
 /* ================================================================= live data (SSE)
    The server pushes one 'snapshot' on connect (full history) and a 'tick'
    on every genuine change thereafter (mirrors the old client sig()-gated
@@ -724,6 +799,7 @@ function applyPayload(p) {
 
   renderAll({ latest: p.latest || {}, tool_parse_counters: p.toolParseCounters });
   renderStatus();
+  renderSparks();
 }
 
 const es = new EventSource('/api/events');
@@ -743,12 +819,7 @@ setInterval(renderStatus, 1000); // keeps the "active"/"idle" wall-clock label t
 let rz;
 window.addEventListener('resize', () => {
   clearTimeout(rz);
-  rz = setTimeout(() => {
-    sparks.decode.render(rings.decode);
-    sparks.prefill.render(rings.prefill);
-    sparks.ttft.render(rings.ttft);
-    sparks.accept.render(rings.accept);
-  }, 150);
+  rz = setTimeout(renderSparks, 150);
 });
 </script>
 </body>

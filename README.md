@@ -10,8 +10,10 @@ plain HTML/CSS/JS, no client framework, no build step for the frontend.
 
 > **What it's for:** MTPLX runs LLMs on Apple Silicon using **MTP (multi-token-prediction)
 > speculative decoding**. Its server exposes a rich `/metrics` endpoint — this project turns
-> that into (1) a dashboard that tells the *speculative-decoding* story at a glance, and
-> (2) a "tail -f for the model" live log of what's being generated right now.
+> that into (1) a dashboard that tells the *speculative-decoding* story at a glance,
+> (2) a "tail -f for the model" live log of what's being generated right now, and
+> (3) durable history — MTPLX only keeps its last ~32 requests, so this server persists them
+> to SQLite and lets you compare whole runs after the fact.
 
 ### Dashboard
 ![MTPLX metrics dashboard](docs/dashboard.png)
@@ -33,6 +35,11 @@ that explain *why* MTP is fast. Around it:
 - **Context window** usage with a cached-vs-fresh-prefill split
 - **Verify-time breakdown** — where decode time actually goes
 - **KV cache** (RAM/SSD source + hit) and **tool-call parse health**
+
+A **live / 1h / 24h / 7d** range selector in the header retargets every sparkline at once. `live`
+draws the in-memory ring buffer, one point per request; the other three query SQLite and draw
+bucketed averages across that window — so the sparklines become actual history instead of only
+the last `RING_SIZE` requests.
 
 ### `public/log.html` — Live activity log
 One row per completed request, newest first:
@@ -156,7 +163,8 @@ mtplx-dashboard/
 │   ├── detail.html        Standalone single-request detail page
 │   └── history.html       Run history: run table, config diff, gauge charts with restart markers
 ├── data/                SQLite history file lives here by default (DB_PATH, gitignored)
-├── docs/                README screenshots
+├── patches/             Optional MTPLX patch enabling full prompt/response capture (opt-in)
+├── docs/                README screenshots, plus design specs and implementation plans
 ├── package.json         Scripts: dev / build / start / test / typecheck
 ├── tsconfig.json
 └── .env.example         Documents the env vars below (not auto-loaded)
@@ -175,6 +183,18 @@ as-is by `express.static`. Only `server/**/*.ts` goes through TypeScript.
 - The server keeps its own deeper in-memory history (sparkline ring buffers sized `RING_SIZE`,
   a live-log buffer sized `LOG_BUFFER_SIZE`, deduped by `request_id`) and retries with exponential
   backoff (capped at `MAX_BACKOFF_MS`) when MTPLX is unreachable.
+- **History is persisted to SQLite** via Node's built-in `node:sqlite` — no driver dependency,
+  which is where the Node `>=22.5` floor comes from. Three tables: one row per completed request,
+  one row per detected MTPLX run (with its `/health` config snapshot), and periodic samples of the
+  gauges that have no owning request (session-bank usage, active/completed requests, tool-parse
+  counters). Numbers and cheap attribution text only — **never prompt or response bodies**. This
+  is what survives a restart, and what backs both the dashboard's history ranges and the entire
+  run-comparison page. Rows older than `RETENTION_DAYS` are pruned on an interval; set
+  `PERSIST_ENABLED=0` to skip persistence entirely and run live-only. Persistence failures are
+  swallowed by design — a broken history file must never take the live dashboard down with it.
+- **A "run" is a detected MTPLX process lifetime**, identified exactly rather than guessed: a
+  low-frequency `/health` poll watches `startup.pid` + `startup.started_at`, so a restart opens a
+  new run row and the history page can attribute requests to the config they actually ran under.
 - Browsers connect once via `EventSource` to `/api/events`: an initial `snapshot` event delivers
   full history immediately (a reload or a brand-new tab never starts from empty), and a `tick`
   event pushes out on every genuine change thereafter — no client-side polling.

@@ -1,8 +1,11 @@
 diff --git a/mtplx/server/openai.py b/mtplx/server/openai.py
-index 02b815a..b5c073d 100644
+index 9aeb8dc..cfe99a5 100644
 --- a/mtplx/server/openai.py
 +++ b/mtplx/server/openai.py
-@@ -13173,6 +13173,54 @@ def _record_stream_cancellation_metric(
+@@ -15117,12 +15117,60 @@ def _record_stream_cancellation_metric(
+             }
+         )
+     except BaseException:
          pass
  
  
@@ -57,7 +60,13 @@ index 02b815a..b5c073d 100644
  def _request_observability(
      request: ChatCompletionRequest,
      *,
-@@ -13238,6 +13286,22 @@ def _request_observability(
+     headers: dict[str, str],
+     metadata: dict[str, Any],
+     session_source: str | None,
+@@ -15182,12 +15230,28 @@ def _request_observability(
+         "request_session_source": session_source,
+         "request_session_candidate_headers": candidate_headers,
+         "request_generation_mode": request_generation_mode,
          "request_depth": int(request_depth),
          "request_last_user_preview": user_texts[-1][:180] if user_texts else None,
          "request_last_user_chars": len(user_texts[-1]) if user_texts else 0,
@@ -80,7 +89,13 @@ index 02b815a..b5c073d 100644
      }
  
  
-@@ -14974,6 +15038,7 @@ def _finalize_batched_ar_generation(
+ def _last_user_text(messages: list[ChatMessage] | list[dict[str, Any]]) -> str:
+     for message in reversed(messages):
+         role = (
+@@ -17058,12 +17122,13 @@ def _finalize_batched_ar_generation(
+     )
+     state.last_metrics.append(dict(envelope))
+     state.last_metrics = state.last_metrics[-100:]
      state.last_request_at = time.time()
      state.requests_completed += 1
      _dashboard_record_completion(state, envelope=envelope, stats=stats)
@@ -88,7 +103,27 @@ index 02b815a..b5c073d 100644
      generated["stats"] = _json_safe(stats)
      generated["completion_tokens"] = completion_tokens
      generated["tok_s"] = stats.get("decode_tok_s") or generated.get("tok_s") or 0.0
-@@ -15716,6 +15781,7 @@ def _run_generation(
+     generated["end_to_end_tok_s"] = stats["server_tok_s"]
+     if not bool(
+         (request_observability or {}).get("warmup")
+@@ -17250,12 +17315,13 @@ def _finalize_mtp_batch_generation(
+     )
+     state.last_metrics.append(dict(envelope))
+     state.last_metrics = state.last_metrics[-100:]
+     state.last_request_at = time.time()
+     state.requests_completed += 1
+     _dashboard_record_completion(state, envelope=envelope, stats=stats)
++    _dashboard_capture_response_text(state, generated.get("text"))
+     generated["stats"] = _json_safe(stats)
+     generated["completion_tokens"] = completion_tokens
+     generated["tok_s"] = stats.get("decode_tok_s") or generated.get("tok_s") or 0.0
+     generated["end_to_end_tok_s"] = stats["server_tok_s"]
+     if not bool(
+         (request_observability or {}).get("warmup")
+@@ -18550,12 +18616,13 @@ def _run_generation(
+             response_is_streaming and blank_retry_budget
+         )
+         _record_request_metrics(state, dict(envelope))
          state.last_request_at = time.time()
          state.requests_completed += 1
          _dashboard_record_completion(state, envelope=envelope, stats=stats)
@@ -96,3 +131,6 @@ index 02b815a..b5c073d 100644
          last = {
              "text": out.text,
              "tokens": out.tokens,
+             "stats": _json_safe(stats),
+             "prompt_tokens": len(prompt_ids),
+             "completion_tokens": completion_tokens,

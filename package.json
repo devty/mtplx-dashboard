@@ -9,7 +9,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "NODE_OPTIONS=--disable-warning=ExperimentalWarning node dist/server.js",
     "test": "node --disable-warning=ExperimentalWarning --import tsx --test server/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "mtplx:postupgrade": "bash scripts/mtplx-postupgrade.sh"
   },
   "engines": {
     "node": ">=22.5"

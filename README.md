@@ -67,6 +67,9 @@ chars" indicator (see Limitations). If you run a body-capture-enabled MTPLX (app
 `response_text`, and the page adds **Full prompt** (per-message transcript) and **Response** cards.
 These fields are optional — the page degrades gracefully to the preview when they're absent.
 
+That patch edits the *installed* mtplx package, so every MTPLX upgrade reverts it silently — run
+`npm run mtplx:postupgrade -- --fix` afterwards to detect and repair it.
+
 ### `public/history.html` — Run history & comparison
 Every detected MTPLX run (restart), newest first, with per-run request counts and decode/TTFT/
 acceptance aggregates. Check two rows to see a config diff — scoped to the six columns actually

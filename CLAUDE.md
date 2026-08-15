@@ -33,7 +33,15 @@ npm run dev              # tsx watch server/server.ts — auto-restarts on chang
 
 npm run build && npm start   # production: compile once, run plain node
 npm run typecheck             # tsc --noEmit
+
+npm run mtplx:postupgrade            # check MTPLX install after an upgrade
+npm run mtplx:postupgrade -- --fix   # …and re-apply the transcript patch if it was reverted
 ```
+
+`mtplx:postupgrade` exists because `patches/mtplx-full-transcript-capture.patch` edits the
+*installed* mtplx package, so every MTPLX upgrade silently reverts it while the
+`MTPLX_DASHBOARD_CAPTURE_BODIES` env var (living in a launchd plist) survives — the server stays
+healthy and the detail page just quietly drops back to 180-char previews. See `patches/README.md`.
 
 `npm test` runs `node:test` unit tests for `server/db.ts` against a throwaway on-disk SQLite file
 in a temp directory — not `:memory:`, because an in-memory database is private to the connection

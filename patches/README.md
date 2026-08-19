@@ -38,8 +38,16 @@ to the 180-char preview (see the "showing N of M chars" indicator on the detail 
 
 ### Applying
 
-Pinned against **MTPLX 2.6.0** (`mtplx-2.6.0-py3-none-any.whl`,
-sha256 `8f2323c3212d1d62e3a5954059f2c91c30322632ffc5c192611fc6951b2a8521`).
+Pinned against **MTPLX 2.8.3** (`mtplx-2.8.3-py3-none-any.whl`,
+sha256 `13503503249256094a0ea972503f037bb273b8d077a45ea8c3fa2a060de40a1e`).
+
+> Regenerated 2026-08-19. The previous pin (2.6.0) stopped applying on 2.8.3:
+> 2.8.0 inserted a new `**({"anthropic_max_tokens_defaulted": True} …)` block
+> immediately after the `request_last_user_chars` anchor, so the
+> `request_messages_full` hunk lost its trailing context and was rejected while
+> the other hunks applied — leaving the file **partially patched but still
+> compiling**. Validated by round-trip: applying this patch to a pristine 2.8.3
+> `openai.py` reproduces the working file byte-for-byte.
 
 The target is the **installed package**, not a git checkout. On a stock MTPLX.app install that
 means the app-provisioned runtime venv:

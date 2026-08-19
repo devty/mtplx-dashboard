@@ -1,14 +1,12 @@
 diff --git a/mtplx/server/openai.py b/mtplx/server/openai.py
-index 9aeb8dc..cfe99a5 100644
 --- a/mtplx/server/openai.py
 +++ b/mtplx/server/openai.py
-@@ -15117,12 +15117,60 @@ def _record_stream_cancellation_metric(
-             }
+@@ -16331,8 +16331,56 @@
          )
      except BaseException:
          pass
- 
- 
++
++
 +def _dashboard_capture_bodies_enabled() -> bool:
 +    """Opt-in switch for storing full prompt/response text on metrics records.
 +
@@ -16,14 +14,14 @@ index 9aeb8dc..cfe99a5 100644
 +    is unauthenticated on localhost. Enable with MTPLX_DASHBOARD_CAPTURE_BODIES=1
 +    when a trusted local dashboard wants complete per-request transcripts.
 +    """
-+
+ 
 +    return os.environ.get("MTPLX_DASHBOARD_CAPTURE_BODIES", "").strip().lower() in {
 +        "1",
 +        "true",
 +        "yes",
 +        "on",
 +    }
-+
+ 
 +
 +def _dashboard_body_max_chars() -> int:
 +    """Per-field cap for captured bodies (default 20k chars). 0 disables the cap."""
@@ -60,20 +58,14 @@ index 9aeb8dc..cfe99a5 100644
  def _request_observability(
      request: ChatCompletionRequest,
      *,
-     headers: dict[str, str],
-     metadata: dict[str, Any],
-     session_source: str | None,
-@@ -15182,12 +15230,28 @@ def _request_observability(
-         "request_session_source": session_source,
-         "request_session_candidate_headers": candidate_headers,
-         "request_generation_mode": request_generation_mode,
+@@ -16398,7 +16446,23 @@
          "request_depth": int(request_depth),
          "request_last_user_preview": user_texts[-1][:180] if user_texts else None,
          "request_last_user_chars": len(user_texts[-1]) if user_texts else 0,
 +        # Full prompt transcript, opt-in (see _dashboard_capture_bodies_enabled).
 +        # Merged into every completion envelope via envelope.update(observability),
 +        # so a single site here covers streaming, AR-batch, and smart-fan paths.
-+        **(
+         **(
 +            {
 +                "request_messages_full": [
 +                    {
@@ -86,16 +78,11 @@ index 9aeb8dc..cfe99a5 100644
 +            if _dashboard_capture_bodies_enabled()
 +            else {}
 +        ),
-     }
- 
- 
- def _last_user_text(messages: list[ChatMessage] | list[dict[str, Any]]) -> str:
-     for message in reversed(messages):
-         role = (
-@@ -17058,12 +17122,13 @@ def _finalize_batched_ar_generation(
-     )
-     state.last_metrics.append(dict(envelope))
-     state.last_metrics = state.last_metrics[-100:]
++        **(
+             {"anthropic_max_tokens_defaulted": True}
+             if getattr(request, "anthropic_max_tokens_defaulted", False)
+             else {}
+@@ -18535,6 +18599,7 @@
      state.last_request_at = time.time()
      state.requests_completed += 1
      _dashboard_record_completion(state, envelope=envelope, stats=stats)
@@ -103,13 +90,7 @@ index 9aeb8dc..cfe99a5 100644
      generated["stats"] = _json_safe(stats)
      generated["completion_tokens"] = completion_tokens
      generated["tok_s"] = stats.get("decode_tok_s") or generated.get("tok_s") or 0.0
-     generated["end_to_end_tok_s"] = stats["server_tok_s"]
-     if not bool(
-         (request_observability or {}).get("warmup")
-@@ -17250,12 +17315,13 @@ def _finalize_mtp_batch_generation(
-     )
-     state.last_metrics.append(dict(envelope))
-     state.last_metrics = state.last_metrics[-100:]
+@@ -18727,6 +18792,7 @@
      state.last_request_at = time.time()
      state.requests_completed += 1
      _dashboard_record_completion(state, envelope=envelope, stats=stats)
@@ -117,13 +98,7 @@ index 9aeb8dc..cfe99a5 100644
      generated["stats"] = _json_safe(stats)
      generated["completion_tokens"] = completion_tokens
      generated["tok_s"] = stats.get("decode_tok_s") or generated.get("tok_s") or 0.0
-     generated["end_to_end_tok_s"] = stats["server_tok_s"]
-     if not bool(
-         (request_observability or {}).get("warmup")
-@@ -18550,12 +18616,13 @@ def _run_generation(
-             response_is_streaming and blank_retry_budget
-         )
-         _record_request_metrics(state, dict(envelope))
+@@ -20465,6 +20531,7 @@
          state.last_request_at = time.time()
          state.requests_completed += 1
          _dashboard_record_completion(state, envelope=envelope, stats=stats)
@@ -131,6 +106,3 @@ index 9aeb8dc..cfe99a5 100644
          last = {
              "text": out.text,
              "tokens": out.tokens,
-             "stats": _json_safe(stats),
-             "prompt_tokens": len(prompt_ids),
-             "completion_tokens": completion_tokens,

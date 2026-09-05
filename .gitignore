@@ -5,3 +5,4 @@ dist/
 .gstack/
 data/
 .superpowers/
+node_modules

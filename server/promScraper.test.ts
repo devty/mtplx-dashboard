@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parsePrometheus } from './promParse';
 import { CounterState } from './promSeries';
-import { deriveSamples, isCumulative } from './promScraper';
+import { deriveSamples, isCumulative, cumulativeRate } from './promScraper';
 
 const read = (n: string) =>
   fs.readFileSync(path.join(__dirname, 'fixtures', n), 'utf8');
@@ -98,4 +98,29 @@ test('isCumulative classifies the real fixture families correctly', () => {
   assert.equal(isCumulative(s, 'rapid_mlx_model_decode_tokens_per_second_last'), false);
   assert.equal(isCumulative(s, 'rapid_mlx_model_ttft_seconds_max'), false);
   assert.equal(isCumulative(s, 'rapid_mlx_uptime_seconds'), false);
+});
+
+/* I3 (final-review finding): persistGauges() used to store a cumulative
+   counter's raw per-interval delta, which is only comparable to another
+   delta taken over the same elapsed window. persistGauges is only reachable
+   from pollOnce's success path, so under scrape backoff or an outage that
+   window varies — the SAME delta taken over a longer gap must persist as a
+   proportionally SMALLER rate, not the same raw number, or queryGauges()
+   would average a 10s delta and a 30s delta together as if they were the
+   same unit and read a threefold recovery burst as a traffic spike. */
+test('cumulativeRate: the same delta over a longer elapsed window yields a proportionally smaller rate', () => {
+  const tenSecondRate = cumulativeRate(3, 10_000);
+  const thirtySecondRate = cumulativeRate(3, 30_000);
+  assert.ok(tenSecondRate !== null && thirtySecondRate !== null);
+  // Same raw delta (3), but the 30s window is 3x longer than the 10s window —
+  // the stored rate must be exactly 1/3 as large, not identical.
+  assert.ok(Math.abs(tenSecondRate - 0.3) < 1e-9);
+  assert.ok(Math.abs(thirtySecondRate - 0.1) < 1e-9);
+  assert.ok(Math.abs(tenSecondRate / thirtySecondRate - 3) < 1e-9);
+});
+
+test('cumulativeRate returns null for a first sighting (null delta) or a non-positive elapsed window', () => {
+  assert.equal(cumulativeRate(null, 10_000), null);
+  assert.equal(cumulativeRate(5, 0), null);
+  assert.equal(cumulativeRate(5, -1), null);
 });

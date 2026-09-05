@@ -185,10 +185,12 @@ footer { margin-top: 22px; font-size: 11.5px; color: var(--muted); text-align: c
     <section class="card">
       <h2>Runs</h2>
       <div class="subtitle">
-        Every detected rapid-mlx run (a restart, inferred from <code>rapid_mlx_uptime_seconds</code>
-        going backwards), newest first. Check up to two to compare their config. Decode/TTFT
-        aggregates and request counts are per-request data — they read empty until the Phase&nbsp;2
-        capture proxy is recording requests.
+        Every detected rapid-mlx run (a restart, detected from either <code>rapid_mlx_uptime_seconds</code>
+        decreasing between scrapes, or the derived run origin landing more than 30s after the last
+        successful observation — which catches a restart that happened entirely during a scrape
+        outage, where the uptime-decrease check alone would see nothing), newest first. Check up to
+        two to compare their config. Decode/TTFT aggregates and request counts are per-request
+        data — they read empty until the Phase&nbsp;2 capture proxy is recording requests.
       </div>
       <table>
         <thead>
@@ -229,7 +231,7 @@ footer { margin-top: 22px; font-size: 11.5px; color: var(--muted); text-align: c
 
   </main>
 
-  <footer>run boundaries detected from a decrease in <code>rapid_mlx_uptime_seconds</code> · dashed lines mark each run's start · no live updates on this page — use Refresh</footer>
+  <footer>run boundaries detected from a decrease in <code>rapid_mlx_uptime_seconds</code>, or from the derived run origin landing more than 30s after the last successful observation (catches a restart during a scrape outage) · dashed lines mark each run's start · no live updates on this page — use Refresh</footer>
 </div>
 
 <script>

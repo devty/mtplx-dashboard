@@ -54,10 +54,15 @@ async function pollOnce(): Promise<void> {
   if (!stopped) timer = setTimeout(() => void pollOnce(), config.healthIntervalMs);
 }
 
-export function start(t: Target): void {
+/** Awaits only the first pass. `pollOnce` reschedules itself at its own end
+ *  (via `setTimeout`), so awaiting this call does not block on every future
+ *  poll — just the one the caller needs to have landed before it starts
+ *  something that depends on `getHealth()`/`getContextWindow()` being
+ *  populated (see server.ts's startup ordering). */
+export async function start(t: Target): Promise<void> {
   target = t;
   stopped = false;
-  void pollOnce();
+  await pollOnce();
 }
 
 export function stop(): void {

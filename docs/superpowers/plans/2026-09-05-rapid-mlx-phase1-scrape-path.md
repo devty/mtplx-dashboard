@@ -2853,3 +2853,13 @@ git commit -m "chore: retire MTPLX artifacts, document the rapid-mlx architectur
 
 - The capture proxy, `transcript` writes, `request` rows, and the restored log/detail pages — **Phase 2**.
 - The second (gemma) target, the target selector, and `history.html`'s second axis — **Phase 3**. The `target_id` columns and the `Target` list shape exist now so neither needs a schema change.
+- **TTFT p50/p90 from histogram buckets.** The design doc's §6 metric-mapping table and decision D5
+  both promise this (`docs/superpowers/specs/2026-09-05-rapid-mlx-prometheus-design.md` lines 232
+  and 243: "Time to first token | improves | histogram buckets give real p50/p90" and "Hero (D5):
+  decode tok/s with p50/p90"). This plan never scheduled a task to compute a percentile — the
+  shipped TTFT card shows only the Δsum/Δcount interval mean, a substitution this plan made
+  silently rather than recording as a deferral. Nothing here needs to be re-collected to add it
+  later: `rapid_mlx_model_ttft_seconds_bucket` samples are already parsed, correctly classified as
+  cumulative by `isCumulative()` (Task 2), and persisted into the `gauge` table by
+  `persistGauges()` (Task 7) exactly like every other cumulative counter. A future task can compute
+  p50/p90 off the already-stored bucket counts without touching the scrape or storage path.

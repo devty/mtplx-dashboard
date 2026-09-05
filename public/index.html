@@ -340,6 +340,7 @@ footer code { font: 11px ui-monospace, Menlo, monospace; }
       <div class="subtitle">Interval mean (Δsum / Δcount) — rapid-mlx exposes no per-request TTFT gauge</div>
       <div class="big"><span id="l-ttft">—</span><span class="unit">s</span></div>
       <div class="spark" id="spark-ttft"></div>
+      <div class="spark-cap" id="spark-ttft-cap" hidden>Per-request TTFT history returns with the Phase 2 capture proxy.</div>
     </section>
 
     <section class="card">
@@ -867,24 +868,34 @@ async function loadHistory() {
   const gen = ++historyGen; // this call's generation — setRange() bumps historyGen on every switch
   const to = Date.now(), from = to - rangeMs;
   try {
-    /* Only decode/ttft are request-derived under rapid-mlx (server/db.ts
-       REQUEST_SERIES) — prefill and accept moved to gauges (spec §5.4:
-       /v1/status.prompt_tps is instantaneous, spec_decode_accept_ratio is
-       server-wide). Fetching all four from /api/history/series like the old
-       MTPLX-era code did gets prefill/accept rejected as unknown names,
-       which 400s the WHOLE request and blanks decode/ttft too. The accept
-       gauge's stored name carries its `method` label exactly like the live
-       SpecDecode card's sv() lookup below — see server/promSeries.ts. */
+    /* None of the four sparklines read from /api/history/series any more.
+       REQUEST_SERIES (server/db.ts) reads decode_tok_s/ttft_s off the
+       `request` table, and nothing in production ever calls
+       insertRequestRow() — that table is permanently empty until the Phase 2
+       capture proxy exists, so a series fetch for decode/ttft would 200 with
+       an honest-looking but permanently empty result.
+
+       decode and prefill DO have a real historical source in the gauge
+       table: model_decode_tokens_per_second_last and prompt_tps are both
+       persisted every scrape by promScraper's persistGauges() whenever they
+       change (see server/promScraper.ts), so they're read from
+       /api/history/gauges instead — same source history.html already uses
+       for its gauge cards.
+
+       ttft and accept have no equivalent. TTFT's live value is an
+       interval mean (Δsum/Δcount over cumulative histogram counters), which
+       isn't a single stored gauge value queryGauges() can hand back — and
+       spec_decode_accept_ratio, while it IS a stored gauge, is a ratio over
+       *lifetime* accepts/attempts, not a windowed rate; graphed across an
+       hour or a day it would just show a slowly-drifting cumulative number
+       that doesn't reflect recent behavior. Both stay genuinely without
+       historical data until the Phase 2 capture proxy records true
+       per-request series — see the captions in renderSparks(). */
     const gaugeParams = new URLSearchParams({ from: String(from), to: String(to), buckets: String(CTX_BUCKETS) });
+    gaugeParams.append('names', 'model_decode_tokens_per_second_last');
     gaugeParams.append('names', 'prompt_tps');
-    gaugeParams.append('names', 'spec_decode_accept_ratio{method=mtp}');
-    const [seriesRes, gaugeRes] = await Promise.all([
-      fetch(`/api/history/series?names=decode,ttft&from=${from}&to=${to}&buckets=${CTX_BUCKETS}`),
-      fetch(`/api/history/gauges?${gaugeParams.toString()}`),
-    ]);
-    if (!seriesRes.ok) throw new Error('HTTP ' + seriesRes.status);
+    const gaugeRes = await fetch(`/api/history/gauges?${gaugeParams.toString()}`);
     if (!gaugeRes.ok) throw new Error('HTTP ' + gaugeRes.status);
-    const j = await seriesRes.json();
     const g = await gaugeRes.json();
     /* A newer range was selected while this request was in flight — its data is
        for a window the user is no longer looking at. Drop it rather than
@@ -892,10 +903,9 @@ async function loadHistory() {
     if (gen !== historyGen) return;
     /* One slot per bucket across the whole window, not one slot per returned
        row — a bucket with no data must render as a gap, not as a seam
-       stitched to its neighbors. Placement uses the RESPONSE's own
-       from/bucketMs so it matches exactly what the server bucketed (both
-       requests were sent with identical from/to/buckets, so j and g agree). */
-    const slots = Math.max(1, Math.ceil((j.to - j.from) / j.bucketMs));
+       stitched to its neighbors. Placement uses the response's own
+       from/bucketMs so it matches exactly what the server bucketed. */
+    const slots = Math.max(1, Math.ceil((g.to - g.from) / g.bucketMs));
     const dense = (pts, src) => {
       const out = new Array(slots).fill(null);
       for (const p of pts || []) {
@@ -905,10 +915,10 @@ async function loadHistory() {
       return out;
     };
     historyRings = {
-      decode:  dense(j.series.decode, j),
-      ttft:    dense(j.series.ttft, j),
+      decode:  dense(g.series['model_decode_tokens_per_second_last'], g),
       prefill: dense(g.series.prompt_tps, g),
-      accept:  dense(g.series['spec_decode_accept_ratio{method=mtp}'], g),
+      ttft:    [],
+      accept:  [],
     };
   } catch {
     if (gen !== historyGen) return;
@@ -924,17 +934,30 @@ function activeRings() {
 
 function renderSparks() {
   const r = activeRings();
+  const historical = rangeMs !== null; // true for 1h/24h/7d — see loadHistory()'s comment
   sparks.decode.render(r.decode);
   sparks.prefill.render(r.prefill);
   sparks.ttft.render(r.ttft);
   sparks.accept.render(r.accept);
+
+  /* ttft has no historical source at all (see loadHistory()) — its spark
+     renders blank for any non-live range, so surface an explicit caption
+     instead of leaving that blank box unexplained. Hidden in live mode,
+     where the spark already carries real per-poll ring data. */
+  const ttftCap = $('spark-ttft-cap');
+  if (ttftCap) ttftCap.hidden = !historical;
+
   const cap = $('spark-accept-cap');
   if (cap) {
-    const vals = r.accept.filter(v => v != null);
-    cap.textContent = vals.length
-      ? fmt((vals.reduce((a, b) => a + b, 0) / vals.length) * 100, 1) + '% mean over ' +
-        vals.length + (rangeMs === null ? ' requests' : ' buckets')
-      : '—';
+    if (historical) {
+      // Same reasoning as ttft above — see loadHistory()'s comment.
+      cap.textContent = 'Per-request accept-ratio history returns with the Phase 2 capture proxy.';
+    } else {
+      const vals = r.accept.filter(v => v != null);
+      cap.textContent = vals.length
+        ? fmt((vals.reduce((a, b) => a + b, 0) / vals.length) * 100, 1) + '% mean over ' + vals.length + ' requests'
+        : '—';
+    }
   }
 }
 

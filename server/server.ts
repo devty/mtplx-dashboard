@@ -132,18 +132,27 @@ const server = app.listen(config.port, () => {
   console.log(`mtplx-dashboard listening on :${config.port}, scraping ${target.label} (${target.upstreamUrl})`);
 });
 
-/* healthPoller starts first, synchronously — no run to establish and no await
-   chain to race with shutdown() any more, unlike the old MTPLX-era boot. It
-   must still run before the scraper starts so the scraper's first observe()
-   call has engine_type/context_window available (see runTracker). */
-healthPoller.start(target);
-scraper.start(target, store);
+/* healthPoller's first poll is awaited before the scraper starts, so the
+   scraper's first observe() call is guaranteed to see engine_type/
+   context_window already populated (see runTracker) rather than racing three
+   small JSON fetches against one ~28 KB text fetch — a race the scraper could
+   win, permanently baking NULLs into that run's row (upsertRun never updates
+   an existing row). Awaiting reintroduces a genuine async gap at startup, so
+   `shuttingDown` guards it: without the check, a SIGTERM arriving during that
+   first health fetch would let shutdown() run to completion and then have
+   this .then() callback start the scraper anyway, after the server believes
+   it has already shut down. */
+let shuttingDown = false;
+void healthPoller.start(target).then(() => {
+  if (!shuttingDown) scraper.start(target, store);
+});
 
 const heartbeat = sse.startHeartbeat();
 const pruneTimer = setInterval(() => store.prune(Date.now()), config.pruneIntervalMs);
 store.prune(Date.now()); // one prune at boot, so a long downtime is cleaned up immediately
 
 function shutdown(): void {
+  shuttingDown = true;
   clearInterval(heartbeat);
   clearInterval(pruneTimer);
   scraper.stop();

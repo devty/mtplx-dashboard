@@ -87,9 +87,38 @@ export function isCumulative(s: PromScrape, name: string): boolean {
   return s.families.get(base)?.type === 'histogram';
 }
 
+/** What a cumulative counter's sample contributes to the gauge table: a rate
+ *  per second, not the raw delta. `persistGauges` is only reachable from
+ *  `pollOnce`'s success path, so the real gap between two persists is
+ *  `config.gaugePersistIntervalMs` only when nothing goes wrong — under
+ *  scrape backoff or any outage it can run arbitrarily longer, and a raw
+ *  delta stored across that longer gap lands in the exact same `gauge.series`
+ *  column as the normal-cadence deltas, with no duration recorded anywhere to
+ *  tell them apart. `queryGauges` then averages a 10 s delta and a 30 s delta
+ *  together as if they were the same unit, which reads as a traffic spike (or
+ *  dip) that never happened, and changing `GAUGE_PERSIST_INTERVAL_MS` would
+ *  silently rescale every value persisted before the change. A rate is stable
+ *  regardless of cadence, so this divides the delta by the true elapsed time
+ *  rather than the assumed one.
+ *
+ *  Returns null when there is no honest value to store: `delta` is already
+ *  null for a counter's first sighting or a reset (see `CounterState.delta`),
+ *  and `elapsedMs <= 0` guards a zero or negative gap (clock skew, or two
+ *  calls landing on the same millisecond) that would otherwise divide by zero
+ *  or invert the sign. */
+export function cumulativeRate(delta: number | null, elapsedMs: number): number | null {
+  if (delta === null || elapsedMs <= 0) return null;
+  return (delta / elapsedMs) * 1000;
+}
+
 function persistGauges(s: PromScrape, now: number): void {
   if (!store || !target) return;
   if (now - lastPersistAt < config.gaugePersistIntervalMs) return;
+  /* The TRUE elapsed time since the last persist, read before it's
+     overwritten below — this is what makes cumulativeRate() unit-stable
+     under backoff (see its comment), as opposed to assuming every call is
+     exactly gaugePersistIntervalMs apart. */
+  const elapsedMs = now - lastPersistAt;
   lastPersistAt = now;
 
   for (const sample of s.samples) {
@@ -98,9 +127,11 @@ function persistGauges(s: PromScrape, now: number): void {
 
     let out: number | null;
     if (isCumulative(s, sample.name)) {
-      out = counters.delta(`persist:${name}`, sample.value);
-      if (out === null) continue; // first sight, or a reset — no honest delta
+      const delta = counters.delta(`persist:${name}`, sample.value);
+      out = cumulativeRate(delta, elapsedMs);
+      if (out === null) continue; // first sight, a reset, or no honest elapsed window
     } else {
+      // Gauges (non-cumulative) are stored as their raw instantaneous value.
       out = sample.value;
     }
 

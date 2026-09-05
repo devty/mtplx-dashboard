@@ -21,7 +21,13 @@ HTML/CSS/JS, no client framework, no build step for the frontend.
 > under `docs/superpowers/specs/`).
 
 ### Dashboard
-![rapid-mlx metrics dashboard](docs/dashboard.png)
+A grid of cards over the live scrape: decode and prefill throughput sparklines, a TTFT interval
+mean, context-window occupancy, prefix-cache hit rate and size, structured-output health, queue
+depth, cumulative request outcomes, Metal memory detail, KV-checkpoint I/O, and a self-hiding
+speculative-decoding card that appears once MTP attempts are non-zero. A live/1h/24h/7d range
+selector switches the sparklines between the in-memory ring and bucketed SQLite history.
+(No current screenshot — the previous one showed the MTPLX-era speculative-decoding hero, which
+this branch removed; a fresh capture is still needed.)
 
 ---
 
@@ -54,8 +60,11 @@ Was a permalink target for a log row (`detail.html?id=<request_id>`); there is n
 now, so it shows the same explanatory panel. Returns with Phase 2.
 
 ### `public/history.html` — Run history & comparison
-Every detected rapid-mlx run (a restart, inferred from `rapid_mlx_uptime_seconds` decreasing
-between scrapes), newest first, with per-run request counts and decode/TTFT aggregates — these
+Every detected rapid-mlx run (a restart, detected from either `rapid_mlx_uptime_seconds` decreasing
+between scrapes, or the derived run origin landing more than 30s after the last successful
+observation — which catches a restart that happened entirely during a scrape outage, where the
+uptime-decrease check alone would see nothing), newest first, with per-run request counts and
+decode/TTFT aggregates — these
 read as zero/`—` until the Phase 2 capture proxy is recording requests. Check two rows to see a
 config diff, scoped to the columns actually promoted onto a `run` row (model, version, KV-cache
 dtype, turboquant mode, spec-decode method, engine type, context window), not a deep diff of the
@@ -162,7 +171,8 @@ mtplx-dashboard/
 │   ├── detail.html        Same, for the old per-request permalink target
 │   └── history.html       Run history: run table, config diff, discovered gauge charts
 ├── data/                SQLite history file lives here by default (DB_PATH, gitignored)
-├── docs/                README screenshots and the design docs under docs/superpowers/specs/
+├── docs/                Design docs under docs/superpowers/specs/ (no current README screenshot —
+│                        the MTPLX-era one was removed; see the Dashboard section above)
 ├── package.json         Scripts: dev / build / start / test / typecheck
 ├── tsconfig.json
 └── .env.example         Documents the env vars above (not auto-loaded)

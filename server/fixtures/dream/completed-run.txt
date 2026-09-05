@@ -1,0 +1,109 @@
+[dream-nightly] Sun Aug 30 07:05:05 EDT 2026 starting
+[dream-nightly:patch] • 1/gateway toJsonSafeValue helper + json-safe tool-result: already present
+[dream-nightly:patch] • 2/subagent adapter parse double-encoded content_blocks: already present
+[dream-nightly:patch] 
+[dream-nightly:patch] applied=0 present=2 failed=0
+[dream-nightly] cycling sources: default calendar gstack gstack-code-xylophone-e88b2316 hermes limitless mail mem social 
+[dream-nightly:export] [export-career-ops] transformed: 421 ok, 0 no-role, 0 no-h1, 2 skipped (metafiles)
+[dream-nightly:export] [export-career-ops] linked 293 evaluations to a company dossier; 69 companies have none
+[dream-nightly:export] [export-career-ops] unlinked companies listed in /Users/styledelk/mybrain/.career-ops-unlinked.txt
+[dream-nightly:export] [export-career-ops] mirrored into /Users/styledelk/mybrain/career-ops
+[dream-nightly:mtplx] warmup probe timed out — restarting
+[dream-nightly:mtplx] restarting com.local.mtplx-server
+[dream-nightly:mtplx] healthy after ~12s
+No stale pages — extraction is up to date.
+Dream cycle (partial) in 1.3s:
+  ✓ lint        0 fix(es) applied; 1545 non-fixable (informational)
+  ✓ backlinks   493 missing back-link(s) found (audit-only; run gbrain check-backlinks fix to materialize)
+  ! sync        +0 added, ~0 modified, -0 deleted; 11 uncommitted file(s) invisible to commit-driven sync — commit them or set sync.include_working_tree=true
+  ✓ extract     0 link(s), 0 timeline entries (incremental: 0 slugs)
+  ! extract_facts  extract_facts skipped: 1 legacy v0.31 facts pending fence backfill
+  ✓ recompute_emotional_weight  recompute_emotional_weight (incremental, 0 slugs)
+[dream-nightly] stamped last_full_cycle_at for default
+Brain is healthy. 6 phase(s) checked in 680.0s.
+[dream-nightly:mtplx] decode 20.120897940761864 tok/s OK (>= 8)
+Extract --stale: 0 link(s) + 0 timeline entr(ies) from 2 page(s).
+Brain is healthy. 6 phase(s) checked in 0.4s.
+[dream-nightly] stamped last_full_cycle_at for calendar
+Brain is healthy. 6 phase(s) checked in 33.4s.
+[dream-nightly:mtplx] decode 20.785211184751002 tok/s OK (>= 8)
+No stale pages — extraction is up to date.
+Brain is healthy. 6 phase(s) checked in 0.5s.
+[dream-nightly] stamped last_full_cycle_at for gstack
+Brain is healthy. 6 phase(s) checked in 28.5s.
+[dream-nightly:mtplx] decode 20.217662069395146 tok/s OK (>= 8)
+No stale pages — extraction is up to date.
+Brain is healthy. 6 phase(s) checked in 1.6s.
+[dream-nightly] stamped last_full_cycle_at for gstack-code-xylophone-e88b2316
+Brain is healthy. 6 phase(s) checked in 30.3s.
+[dream-nightly:mtplx] decode 17.564744013636854 tok/s OK (>= 8)
+Extract --stale: 0 link(s) + 0 timeline entr(ies) from 8 page(s).
+Skipped 1 candidate(s) whose target page doesn't exist (references to non-pages are never persisted).
+Brain is healthy. 6 phase(s) checked in 0.4s.
+[dream-nightly] stamped last_full_cycle_at for hermes
+Brain is healthy. 6 phase(s) checked in 255.6s.
+[dream-nightly:mtplx] decode 20.850321730506927 tok/s OK (>= 8)
+No stale pages — extraction is up to date.
+Brain is healthy. 6 phase(s) checked in 0.3s.
+[dream-nightly] stamped last_full_cycle_at for limitless
+Brain is healthy. 6 phase(s) checked in 31.8s.
+[dream-nightly:mtplx] decode 23.201971126446416 tok/s OK (>= 8)
+Extract --stale: 0 link(s) + 0 timeline entr(ies) from 5 page(s).
+Skipped 74 candidate(s) whose target page doesn't exist (references to non-pages are never persisted).
+Dream cycle (partial) in 0.4s:
+  ✓ lint        1 fix(es) applied; 282 non-fixable (informational)
+  ✓ backlinks   29 missing back-link(s) found (audit-only; run gbrain check-backlinks fix to materialize)
+  ! sync        +0 added, ~0 modified, -0 deleted; 2 uncommitted file(s) invisible to commit-driven sync — commit them or set sync.include_working_tree=true
+  ✓ extract     0 link(s), 0 timeline entries (incremental: 0 slugs)
+  ✓ extract_facts  0 fact(s) reconciled across 0 page(s)
+  ✓ recompute_emotional_weight  recompute_emotional_weight (incremental, 0 slugs)
+  totals: lint=1 backlinks=0 synced=0 extracted=0 embedded=0 orphans=0 synth_transcripts=0 synth_pages=0 patterns=0
+[dream-nightly] stamped last_full_cycle_at for mail
+Brain is healthy. 6 phase(s) checked in 85.7s.
+[dream-nightly:mtplx] decode 17.875773988584854 tok/s OK (>= 8)
+Extract --stale: 0 link(s) + 0 timeline entr(ies) from 1 page(s).
+Brain is healthy. 6 phase(s) checked in 0.5s.
+[dream-nightly] stamped last_full_cycle_at for mem
+Brain is healthy. 6 phase(s) checked in 26.8s.
+[dream-nightly:mtplx] decode 18.127117530228624 tok/s OK (>= 8)
+No stale pages — extraction is up to date.
+Brain is healthy. 6 phase(s) checked in 0.8s.
+[dream-nightly] stamped last_full_cycle_at for social
+Brain is healthy. 6 phase(s) checked in 31.4s.
+[dream-nightly] global pass brain dir: /Users/styledelk/mybrain
+[dream-nightly] global pass (brain-wide phases, once)
+[dream-nightly:mtplx] decode 20.298215358411074 tok/s OK (>= 8)
+Dream cycle (partial) in 9424.8s:
+  ✓ synthesize  no synthesis submitted (2 passing file(s) skipped)
+  ✓ resolve_symbol_edges  61 chunk(s) walked; resolved 0, ambiguous 0, unmatched 0
+  ✓ patterns    28 pattern page(s) written/updated
+  ✓ concepts_tag  concepts_tag: tagged 31/31 atom(s), 74 ref(s)
+  ✓ synthesize_concepts  synthesize_concepts: 573 concepts (T1=401 T2=85 T3=87)
+  ✓ concepts_link  concepts_link: created 49 edge(s), 21 atoms ↔ 30 concepts
+  ✓ cluster_merge  cluster_merge: 1 merged, 0 promoted, 35 queued for review
+  ! grade_takes  grade_takes: scanned 26 takes (4 too recent, 9 cached, 13 new verdicts, 0 auto-applied) (2 warning(s))
+  ✓ calibration_profile  calibration_profile: holder=self brier=0.20 (240 resolved, 1 patterns, 0 bias tags, gate fell back to template)
+  ✓ drift       no candidates: no soft-band takes with recent timeline evidence
+  ✓ skillopt    no stale skills with benchmarks; nothing to optimize
+  ✓ embed       7 chunk(s) newly embedded (0 already had embeddings)
+  ✓ orphans     847 orphan page(s) out of 14963 total
+  ✓ purge       purged 0 source(s), 0 page(s), 0 orphan clone temp dir(s), 0 stale op_checkpoint(s), 0 stale brainstorm checkpoint(s), 0 stale batch-retry audit file(s), and 0 stale volunteer event(s)
+  totals: lint=0 backlinks=0 synced=0 extracted=0 embedded=7 orphans=847 synth_transcripts=0 synth_pages=0 patterns=28
+[dream-nightly] global pass ok
+[dream-nightly:commit] default committed 7855f37
+[dream-nightly:commit] default re-synced (freshness advanced)
+[dream-nightly:commit] default pushed to origin
+[dream-nightly:commit] mail committed 33c714e
+[dream-nightly:commit] mail re-synced (freshness advanced)
+[dream-nightly:commit] mail pushed to origin
+[dream-nightly:orphans] orphan-link reconcile applied
+[dream-nightly:parity] OK calendar: 1743 page(s) / 442 file(s) (394%)
+[dream-nightly:parity] OK default: 5492 page(s) / 2294 file(s) (239%)
+[dream-nightly:parity] OK gstack: 84 page(s) / 6 file(s) (1400%)
+[dream-nightly:parity] OK gstack-code-xylophone-e88b2316: 212 page(s) / 26 file(s) (815%)
+[dream-nightly:parity] OK hermes: 377 page(s) / 130 file(s) (290%)
+[dream-nightly:parity] OK limitless: 235 page(s) / 58 file(s) (405%)
+[dream-nightly:parity] OK mail: 750 page(s) / 350 file(s) (214%)
+[dream-nightly:parity] OK mem: 632 page(s) / 386 file(s) (163%)
+[dream-nightly:parity] OK social: 5438 page(s) / 1765 file(s) (308%)
+[dream-nightly] Sun Aug 30 10:04:50 EDT 2026 done (dream exit=0)

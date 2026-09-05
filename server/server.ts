@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { config } from './config';
 import { createStore, REQUEST_SERIES } from './db';
+import { createDreamService } from './dreamService';
 import * as scraper from './promScraper';
 import * as healthPoller from './healthPoller';
 import * as sse from './sse';
@@ -126,6 +127,27 @@ app.get('/api/history/runs/:id', (req, res) => {
     return;
   }
   res.json(run);
+});
+
+const dream = createDreamService(store);
+
+app.get('/api/dream/nights', (req, res) => {
+  const raw = Number(req.query.limit);
+  const limit = Number.isFinite(raw) ? Math.min(Math.max(Math.trunc(raw), 1), 365) : 14;
+  res.json(dream.nights(limit));
+});
+
+app.get('/api/dream/nights/:date', (req, res) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) {
+    res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    return;
+  }
+  const detail = dream.night(req.params.date);
+  if (!detail) {
+    res.status(404).json({ error: 'no such night' });
+    return;
+  }
+  res.json(detail);
 });
 
 const server = app.listen(config.port, () => {

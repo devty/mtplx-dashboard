@@ -102,7 +102,7 @@ export class RunTracker {
       }),
     };
 
-    this.runId = this.deps.store.upsertRun(info, now);
+    this.runId = this.deps.store.upsertRun(info, now, { adopt: isFirst && !this.restarted });
   }
 
   getRunId(): number | null { return this.runId; }

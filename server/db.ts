@@ -4,16 +4,21 @@ import path from 'node:path';
 
 export const SCHEMA_VERSION = 2;
 
-/** Two derived origins this close describe the same process.
+/** Two derived origins this close describe the same process — but ONLY when
+ *  the caller already knows it is looking at an unchanged process (see the
+ *  `adopt` option on upsertRun).
  *
- *  `started_at` is derived as `now - uptime * 1000`, and `now` and `uptime` are
- *  sampled independently, so the value wanders by milliseconds between
- *  observations — and by more across a dashboard restart, where the derivation
- *  starts over. Exact-match keying therefore mints a new run every time the
- *  DASHBOARD restarts, fragmenting one inference process into many rows.
+ *  `started_at` is derived as `now - uptime * 1000` from independently sampled
+ *  values, so it wanders by milliseconds between observations and by more
+ *  across a dashboard restart, where the derivation starts over. Exact-match
+ *  keying therefore mints a new run every time the DASHBOARD restarts.
  *
- *  A genuine restart moves the origin by the whole previous uptime, so no real
- *  pair of runs lands inside this window. */
+ *  Distance alone is NOT sufficient evidence of sameness: in a crash loop each
+ *  short-lived process starts within this window of the last, so an
+ *  unconditional tolerant match would merge N real restarts into one
+ *  never-closed run and hide the instability the run table exists to show.
+ *  That is why adoption is gated on the caller's first observation rather than
+ *  on the window alone. */
 export const RUN_IDENTITY_TOLERANCE_MS = 30_000;
 
 export interface StoreOptions {
@@ -127,7 +132,7 @@ export interface RequestRow {
  *  in the test file's own read connection, not on this interface. */
 export interface Store {
   status(): PersistStatus;
-  upsertRun(info: RunInfo, now: number): number | null;
+  upsertRun(info: RunInfo, now: number, opts?: { adopt?: boolean }): number | null;
   queryRuns(limit: number): RunSummary[];
   getRun(id: number): RunDetail | null;
   insertRequestRow(r: RequestRow): void;
@@ -400,26 +405,31 @@ class SqliteStore implements Store {
     return { enabled: this.options.enabled, ok: this.ok, lastError: this.lastError };
   }
 
-  upsertRun(info: RunInfo, now: number): number | null {
+  upsertRun(info: RunInfo, now: number, opts: { adopt?: boolean } = {}): number | null {
     if (!this.db) return null;
     try {
       /* Adopt the nearest run whose origin is within tolerance rather than
-         requiring an exact match — see RUN_IDENTITY_TOLERANCE_MS. */
-      const existing = this.db
-        .prepare(
-          `SELECT id FROM run
-            WHERE target_id = ? AND ABS(started_at - ?) <= ?
-            ORDER BY ABS(started_at - ?) LIMIT 1`
-        )
-        .get(info.targetId, info.startedAt, RUN_IDENTITY_TOLERANCE_MS, info.startedAt) as
-        | { id: number }
-        | undefined;
+         requiring an exact match — see RUN_IDENTITY_TOLERANCE_MS. Only when
+         the caller has told us this is a first observation of an unchanged
+         process; otherwise (a detected restart) distance alone is not
+         evidence of sameness — see the tolerance comment above. */
+      if (opts.adopt) {
+        const existing = this.db
+          .prepare(
+            `SELECT id FROM run
+              WHERE target_id = ? AND ABS(started_at - ?) <= ?
+              ORDER BY ABS(started_at - ?) LIMIT 1`
+          )
+          .get(info.targetId, info.startedAt, RUN_IDENTITY_TOLERANCE_MS, info.startedAt) as
+          | { id: number }
+          | undefined;
 
-      if (existing) {
-        /* The process is demonstrably still running, so clear any ended_at a
-           previous false-restart stamped on it. */
-        this.db.prepare('UPDATE run SET ended_at = NULL WHERE id = ?').run(existing.id);
-        return existing.id;
+        if (existing) {
+          /* The process is demonstrably still running, so clear any ended_at a
+             previous false-restart stamped on it. */
+          this.db.prepare('UPDATE run SET ended_at = NULL WHERE id = ?').run(existing.id);
+          return existing.id;
+        }
       }
 
       /* Close this target's open runs only — another target's run is unrelated

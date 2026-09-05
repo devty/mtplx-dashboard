@@ -323,7 +323,7 @@ test('an unopenable path degrades instead of throwing', () => {
 test('upsertRun is idempotent for the same target and start time', () => {
   const { store, read, cleanup } = tmpStore();
   const a = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_001_000);
-  const b = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_002_000);
+  const b = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_002_000, { adopt: true });
   assert.equal(typeof a, 'number');
   assert.equal(b, a);
   assert.equal(read<RunRow>(RUNS).length, 1);
@@ -390,7 +390,7 @@ test('upsertRun on a disabled store returns null', () => {
 test('a dashboard restart does not mint a second run', () => {
   const { store, read, cleanup } = tmpStore();
   const a = store.upsertRun(runInfo('qwen', 1_788_600_081_483), 1_788_600_082_000);
-  const b = store.upsertRun(runInfo('qwen', 1_788_600_081_486), 1_788_600_083_000);
+  const b = store.upsertRun(runInfo('qwen', 1_788_600_081_486), 1_788_600_083_000, { adopt: true });
   assert.equal(typeof a, 'number');
   assert.equal(b, a);
   assert.equal(read<RunRow>(RUNS).length, 1);
@@ -407,7 +407,7 @@ test('adopting a nearby run reopens one wrongly closed by this same bug', () => 
   db.close();
   assert.equal(read<RunRow>(RUNS).find(r => r.id === id)?.ended_at, 1_788_630_490_195);
 
-  const again = store.upsertRun(runInfo('qwen', 1_788_600_081_486), 1_788_630_600_000);
+  const again = store.upsertRun(runInfo('qwen', 1_788_600_081_486), 1_788_630_600_000, { adopt: true });
   assert.equal(again, id);
   assert.equal(read<RunRow>(RUNS).find(r => r.id === id)?.ended_at, null);
   cleanup();
@@ -428,7 +428,7 @@ test('a genuine restart (origin outside tolerance) still creates a new run', () 
 test('identity tolerance does not cross target boundaries', () => {
   const { store, read, cleanup } = tmpStore();
   const qwen = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_001_000);
-  const gemma = store.upsertRun(runInfo('gemma', 1_700_000_000_000), 1_700_000_001_000);
+  const gemma = store.upsertRun(runInfo('gemma', 1_700_000_000_000), 1_700_000_001_000, { adopt: true });
   assert.notEqual(gemma, qwen);
   assert.equal(read<RunRow>(RUNS).length, 2);
   cleanup();
@@ -445,9 +445,65 @@ test('adoption prefers the nearest run when more than one is in range', () => {
   // 1s from `second`'s origin, comfortably within tolerance of both — nearest wins.
   const adopted = store.upsertRun(
     runInfo('qwen', 1_700_000_000_000 + gap + 1_000),
-    1_700_000_000_500 + gap + 1_000
+    1_700_000_000_500 + gap + 1_000,
+    { adopt: true }
   );
   assert.equal(adopted, second);
+  cleanup();
+});
+
+/* R25: adoption must be conditioned on *why* upsertRun is being called, not on
+   distance alone — a crash loop (short-lived process, each restart landing
+   well within RUN_IDENTITY_TOLERANCE_MS of the last) must mint a new run per
+   life rather than being folded into one never-closed row. See the updated
+   RUN_IDENTITY_TOLERANCE_MS comment and the `adopt` option on upsertRun. */
+
+test('a crash loop is not merged into one run', () => {
+  const { store, read, cleanup } = tmpStore();
+  // Three lives, ~5s apart — well inside tolerance, but each call declares
+  // `adopt: false` because runTracker only sets `adopt: true` on a first
+  // observation, and a crash loop is a detected restart every time.
+  const first = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_000_100, { adopt: false });
+  const second = store.upsertRun(runInfo('qwen', 1_700_000_005_000), 1_700_000_005_100, { adopt: false });
+  const third = store.upsertRun(runInfo('qwen', 1_700_000_010_000), 1_700_000_010_100, { adopt: false });
+
+  assert.equal(typeof first, 'number');
+  assert.equal(typeof second, 'number');
+  assert.equal(typeof third, 'number');
+  assert.notEqual(second, first);
+  assert.notEqual(third, second);
+  assert.notEqual(third, first);
+
+  const rows = read<RunRow>(RUNS);
+  assert.equal(rows.length, 3);
+  assert.equal(rows.find(r => r.id === first)?.ended_at, 1_700_000_005_100);
+  assert.equal(rows.find(r => r.id === second)?.ended_at, 1_700_000_010_100);
+  assert.equal(rows.find(r => r.id === third)?.ended_at, null);
+  cleanup();
+});
+
+test('adoption still works when the caller allows it', () => {
+  const { store, read, cleanup } = tmpStore();
+  // This is the dashboard-restart case R24 fixed: same process, origin off by
+  // a few ms because now/uptime were sampled independently again.
+  const first = store.upsertRun(runInfo('qwen', 1_788_600_081_483), 1_788_600_082_000);
+  const second = store.upsertRun(runInfo('qwen', 1_788_600_081_486), 1_788_600_083_000, { adopt: true });
+  assert.equal(typeof first, 'number');
+  assert.equal(second, first);
+  assert.equal(read<RunRow>(RUNS).length, 1);
+  cleanup();
+});
+
+test('the default is not to adopt', () => {
+  const { store, read, cleanup } = tmpStore();
+  // No options at all — a future caller that forgets the flag should
+  // over-report runs, not silently merge a crash loop into one.
+  const first = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_000_500);
+  const second = store.upsertRun(runInfo('qwen', 1_700_000_000_005), 1_700_000_000_505);
+  assert.equal(typeof first, 'number');
+  assert.equal(typeof second, 'number');
+  assert.notEqual(second, first);
+  assert.equal(read<RunRow>(RUNS).length, 2);
   cleanup();
 });
 

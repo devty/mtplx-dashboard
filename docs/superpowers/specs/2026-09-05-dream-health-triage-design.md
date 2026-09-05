@@ -283,9 +283,22 @@ deferred. §4's `attribution` and `commit_source` fields are the seams it lands 
 git cross-check ships in this phase because it is cheap, robust, and already proven
 necessary by the Sep 5 disagreement.
 
-## 11. Sequencing risk
+## 11. Sequencing (resolved)
 
-Tasks 7–9 of `2026-09-05-rapid-mlx-phase1-scrape-path.md` rewrite `server/types.ts`, the
-poller and the server payload wiring — surfaces this feature attaches to. This design was
-approved with that risk understood. Implementation either waits for those tasks to land
-or accepts rebasing onto them.
+This design was written expecting Tasks 7–9 of
+`2026-09-05-rapid-mlx-phase1-scrape-path.md` to rewrite `server/types.ts`, the poller and
+the server payload wiring underneath it. Those tasks have since landed — `500a738` (the
+Prometheus scraper replacing the MTPLX poller), `1b42785` (the `StatePayload` reshape and
+server wiring) and `b018182` (the throughput/memory hero). This branch is cut from that
+work, so the risk is retired rather than pending.
+
+What survived the rewrite, verified against the branch tip:
+
+- `SCHEMA_VERSION` is still 2, so §4's bump to 3 stands.
+- `StoreOptions` and `createStore` are unchanged, so the store contract §4 relies on holds.
+- `server.ts` still exposes the `store` singleton and the `/api/history/*` handlers that
+  this feature's two routes sit beside.
+
+One live overlap remains, outside this branch: `public/index.html`, `log.html` and
+`history.html` have uncommitted modifications in the sibling `rapid-mlx-prometheus`
+worktree. §6's nav-link edits touch the same three files.

@@ -37,8 +37,8 @@
 **Modify:**
 - `server/db.ts` — `SCHEMA_VERSION` 2 → 3, four tables, dream store methods, set-aside archive naming fix.
 - `server/db.test.ts` — dream store coverage.
-- `server/server.ts` — two routes. **This is the only file that collides with Tasks 7–9 of `2026-09-05-rapid-mlx-phase1-scrape-path.md`** (spec §11); it is deliberately isolated into Task 7.
-- `public/index.html`, `public/log.html`, `public/history.html` — one nav link each (Task 8).
+- `server/server.ts` — two routes, isolated into Task 7. The rapid-mlx tasks that were going to rewrite this file have already landed and this branch is cut from them (spec §11), so the collision is retired; the isolation stands because it keeps the edit to two handlers.
+- `public/index.html`, `public/log.html`, `public/history.html` — one nav link each (Task 8). **These three have uncommitted modifications in the sibling `rapid-mlx-prometheus` worktree.** Editing them here is expected to conflict when that work is committed; this was accepted deliberately. Keep the edit to the single nav line so the conflict is trivial to resolve.
 
 ---
 
@@ -2004,8 +2004,12 @@ Create `public/dream.html`. Framework-free, everything inline, matching the othe
 </style>
 </head>
 <body>
-<nav><a href="/">dashboard</a> · <a href="/log.html">log</a> ·
-     <a href="/history.html">history</a> · <b>dream</b></nav>
+<nav>
+  <a href="index.html">Dashboard</a>
+  <a href="log.html">Live log</a>
+  <a href="history.html">History</a>
+  <a href="dream.html" class="active">Dream</a>
+</nav>
 
 <h1>Dream health</h1>
 <div id="status"></div>
@@ -2106,11 +2110,25 @@ load();
 
 - [ ] **Step 2: Add the nav link to the other pages**
 
-In each of `public/index.html`, `public/log.html`, `public/history.html`, add `dream` to the existing nav. If the nav markup differs per page, match each page's own markup rather than imposing one shape.
+The existing nav markup, verified at the branch tip, is three anchors with `class="active"` marking the current page:
+
+```html
+<a href="index.html" class="active">Dashboard</a>
+<a href="log.html">Live log</a>
+<a href="history.html">History</a>
+```
+
+Confirm the insertion point, then add one line after the History anchor in each of the three files:
 
 ```bash
-grep -n 'history.html' public/index.html public/log.html public/history.html
+grep -n 'href="history.html"' public/index.html public/log.html public/history.html
 ```
+
+```html
+<a href="dream.html">Dream</a>
+```
+
+Change nothing else in these files. They carry uncommitted modifications in the sibling `rapid-mlx-prometheus` worktree, so a one-line diff keeps the eventual conflict to one line.
 
 - [ ] **Step 3: Verify in a browser**
 

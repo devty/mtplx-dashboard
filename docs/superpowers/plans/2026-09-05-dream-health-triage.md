@@ -2069,6 +2069,16 @@ function select(el) {
 
 async function detail(date) {
   const res = await fetch('/api/dream/nights/' + date);
+  /* 503 means the log could not be read at all; 404 means it was read and this
+     night genuinely has no run. Collapsing them here would undo, at the UI
+     layer, the same distinction the API was fixed to preserve. */
+  if (res.status === 503) {
+    const body = await res.json().catch(() => ({}));
+    $('detail').innerHTML =
+      '<div class="banner">Could not read the dream log: ' +
+      (body.error || 'unknown error') + '</div>';
+    return;
+  }
   if (!res.ok) { $('detail').innerHTML = '<p class="muted">No run for ' + date + '.</p>'; return; }
   const d = await res.json();
   if (!d.run) { $('detail').innerHTML = '<p class="muted">' + date + ': never fired.</p>'; return; }

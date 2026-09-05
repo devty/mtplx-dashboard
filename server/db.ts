@@ -4,14 +4,18 @@ import path from 'node:path';
 
 export const SCHEMA_VERSION = 2;
 
-/** Two derived origins this close describe the same process — but ONLY when
- *  the caller already knows it is looking at an unchanged process (see the
- *  `adopt` option on upsertRun).
+/** Governs only the TOLERANT (nearest-match) path in upsertRun — the one
+ *  gated on `opts.adopt` — for two derived origins that are close but not
+ *  identical. An exact `(target_id, started_at)` repeat is same-run identity,
+ *  not an inference, and is handled unconditionally before this tolerance is
+ *  ever consulted (see upsertRun).
  *
  *  `started_at` is derived as `now - uptime * 1000` from independently sampled
  *  values, so it wanders by milliseconds between observations and by more
- *  across a dashboard restart, where the derivation starts over. Exact-match
- *  keying therefore mints a new run every time the DASHBOARD restarts.
+ *  across a dashboard restart, where the derivation starts over. Without this
+ *  tolerance, that wander would mint a spurious new run every time the
+ *  DASHBOARD (not the target) restarts, even though the target process never
+ *  did.
  *
  *  Distance alone is NOT sufficient evidence of sameness: in a crash loop each
  *  short-lived process starts within this window of the last, so an
@@ -408,6 +412,15 @@ class SqliteStore implements Store {
   upsertRun(info: RunInfo, now: number, opts: { adopt?: boolean } = {}): number | null {
     if (!this.db) return null;
     try {
+      /* Exact origin means the same run — identity, not inference — so this
+         holds regardless of `adopt`. Without it a benign repeat would hit the
+         UNIQUE index, and fail() would report degraded persistence to the user
+         for something entirely harmless. */
+      const exact = this.db
+        .prepare('SELECT id FROM run WHERE target_id = ? AND started_at = ?')
+        .get(info.targetId, info.startedAt) as { id: number } | undefined;
+      if (exact) return exact.id;
+
       /* Adopt the nearest run whose origin is within tolerance rather than
          requiring an exact match — see RUN_IDENTITY_TOLERANCE_MS. Only when
          the caller has told us this is a first observation of an unchanged

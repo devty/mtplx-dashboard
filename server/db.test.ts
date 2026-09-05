@@ -323,9 +323,27 @@ test('an unopenable path degrades instead of throwing', () => {
 test('upsertRun is idempotent for the same target and start time', () => {
   const { store, read, cleanup } = tmpStore();
   const a = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_001_000);
-  const b = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_002_000, { adopt: true });
+  const b = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_002_000);
   assert.equal(typeof a, 'number');
   assert.equal(b, a);
+  assert.equal(read<RunRow>(RUNS).length, 1);
+  cleanup();
+});
+
+/* R26: this exact-repeat idempotency must not just return the right id — it
+   must not touch `ok`/`lastError` at all. R25 gated the exact-match lookup on
+   `opts.adopt`, so a default-options repeat fell through to INSERT and hit
+   the `run_identity` UNIQUE index; fail() then set ok=false, which
+   Store.status() feeds into StatePayload.persist, degrading the dashboard's
+   reported persistence health for something entirely benign. */
+test('an exact-origin repeat with default options does not degrade the store', () => {
+  const { store, read, cleanup } = tmpStore();
+  const a = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_001_000);
+  const b = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_002_000);
+  assert.equal(typeof a, 'number');
+  assert.equal(b, a);
+  assert.equal(store.status().ok, true);
+  assert.equal(store.status().lastError, null);
   assert.equal(read<RunRow>(RUNS).length, 1);
   cleanup();
 });

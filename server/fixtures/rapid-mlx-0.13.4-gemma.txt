@@ -1,0 +1,277 @@
+# HELP rapid_mlx_build_info Build info as constant 1 (version/model carried in labels).
+# TYPE rapid_mlx_build_info gauge
+rapid_mlx_build_info{version="0.13.4",model="gemma-4-26b-qat-4bit"} 1
+# HELP rapid_mlx_kv_cache_dtype Effective KV cache dtype (R15 #300). One series per dtype label; the value is 1 for the active dtype and 0 for the others.
+# TYPE rapid_mlx_kv_cache_dtype gauge
+rapid_mlx_kv_cache_dtype{dtype="bf16"} 1
+rapid_mlx_kv_cache_dtype{dtype="int8"} 0
+rapid_mlx_kv_cache_dtype{dtype="int4"} 0
+# HELP rapid_mlx_response_format_strict_total Requests with response_format.type=json_schema and strict=true (H-06). Counts admitted strict requests regardless of whether the [guided] extra was installed — installs missing the extra now fall through to the post-generate validation + repair-retry path (R12-4).
+# TYPE rapid_mlx_response_format_strict_total counter
+rapid_mlx_response_format_strict_total 0
+# HELP rapid_mlx_response_format_strict_violations_total Strict json_schema responses that failed post-decode jsonschema.validate (H-06). Constrained decoding via llguidance should make this unreachable — any non-zero rate on a guided install signals that the guided path silently degraded. On non-guided installs this counts the requests that ultimately surfaced 422 to the client after the R12-4 repair retry also failed.
+# TYPE rapid_mlx_response_format_strict_violations_total counter
+rapid_mlx_response_format_strict_violations_total 0
+# HELP rapid_mlx_response_format_strict_repairs_attempted_total R12-4 strict-mode auto-repair attempts. Ticks once per request whose initial unconstrained output failed jsonschema.validate and was re-prompted with a system-injected repair hint. Includes attempts that ultimately still failed (those also bump rapid_mlx_response_format_strict_violations_total).
+# TYPE rapid_mlx_response_format_strict_repairs_attempted_total counter
+rapid_mlx_response_format_strict_repairs_attempted_total 0
+# HELP rapid_mlx_response_format_strict_repairs_succeeded_total R12-4 strict-mode auto-repair successes. Ticks when an auto-repair attempt produced output that validated against the supplied schema. Divide by rapid_mlx_response_format_strict_repairs_attempted_total for the repair success rate — low rates suggest the client's schema is too restrictive for the model.
+# TYPE rapid_mlx_response_format_strict_repairs_succeeded_total counter
+rapid_mlx_response_format_strict_repairs_succeeded_total 0
+# HELP rapid_mlx_response_format_strict_repairs_skipped_context_overflow_total H-06 #267b strict-mode repair-retry skips. Ticks when the post-build repair prompt (instructions + schema + up to 4 KiB of failed output) would have exceeded the engine's context window. The route skips the retry and surfaces the ORIGINAL 422 json_schema_violation envelope instead of 502 strict_repair_engine_failure, so clients see a deterministic validation outcome. A non-zero rate signals the repair prompt template is too large for the deployed model's context window.
+# TYPE rapid_mlx_response_format_strict_repairs_skipped_context_overflow_total counter
+rapid_mlx_response_format_strict_repairs_skipped_context_overflow_total 0
+# HELP rapid_mlx_response_cache_hits_total Prompt-deterministic response-cache hits — completely repeated greedy (temperature==0 / top_k==1) chat requests served from the stored completion with zero GPU decode. Zero when the cache is disabled (--response-cache-entries 0, the default).
+# TYPE rapid_mlx_response_cache_hits_total counter
+rapid_mlx_response_cache_hits_total 0
+# HELP rapid_mlx_response_cache_misses_total Prompt-deterministic response-cache LOOKUP misses — eligible greedy chat requests that reached the cache lookup and found no stored completion. Ticked at lookup time (before admission / generation), so a subsequently rejected or failed request is still counted as a lookup miss and may not produce a stored entry. Non-greedy / streaming / multimodal requests are NOT eligible and do NOT tick this counter. Pair with rapid_mlx_response_cache_hits_total for the hit rate.
+# TYPE rapid_mlx_response_cache_misses_total counter
+rapid_mlx_response_cache_misses_total 0
+# HELP rapid_mlx_mxfp4_moe_distributed_warnings_total Load-time warnings fired for the MoE + MXFP4 + multi-device throughput cliff (upstream mlx#3402). Any non-zero value means an operator started a model matching the three-tuple; expect ~0.27 tok/s vs ~16 tok/s until upstream lands a fix.
+# TYPE rapid_mlx_mxfp4_moe_distributed_warnings_total counter
+rapid_mlx_mxfp4_moe_distributed_warnings_total 0
+# HELP rapid_mlx_nvfp4_moe_warnings_total Load-time warnings fired for the MoE + NVFP4 dynamic-range loss (upstream mlx#2962, signed E4M3 scales instead of Blackwell unsigned UE4M3 -> ~137x dynamic-range loss). Fires regardless of device count because the dynamic-range loss bites even on single-device serving.
+# TYPE rapid_mlx_nvfp4_moe_warnings_total counter
+rapid_mlx_nvfp4_moe_warnings_total 0
+# HELP rapid_mlx_ubc_evicted_bytes_total Cumulative bytes that the macOS Unified Buffer Cache eviction helper (Defect 4) has asked the kernel to discard via msync(MS_INVALIDATE). Reported per shard file evicted by the load path. Non-zero only on Darwin; Linux / Windows builds keep the series flat at 0 since they don't suffer the UBC retention cliff that motivated this counter.
+# TYPE rapid_mlx_ubc_evicted_bytes_total counter
+rapid_mlx_ubc_evicted_bytes_total{path_kind="safetensors"} 15608838574
+# HELP rapid_mlx_spec_decode_attempts_total MTP draft proposals (R15-P1 #302, mlx-lm PR #990). Bumped once per mtp_generate_step verify iteration. Pair with rapid_mlx_spec_decode_accepts_total to compute the accept ratio (also surfaced as rapid_mlx_spec_decode_accept_ratio).
+# TYPE rapid_mlx_spec_decode_attempts_total counter
+rapid_mlx_spec_decode_attempts_total{family="gemma4",method="mtp"} 0
+# HELP rapid_mlx_spec_decode_accepts_total MTP drafts accepted by the verify backbone pass. Always <= rapid_mlx_spec_decode_attempts_total. The accept ratio is a speedup signal, not a correctness signal: every proposal is checked by the target, while byte identity with ordinary decode depends on the model family's numerical verify path.
+# TYPE rapid_mlx_spec_decode_accepts_total counter
+rapid_mlx_spec_decode_accepts_total{family="gemma4",method="mtp"} 0
+# HELP rapid_mlx_spec_decode_accept_ratio accepts / attempts. 0.0 when no attempts (Prometheus convention: no-data → 0 rather than NaN so dashboards don't flip to no-data during cold start).
+# TYPE rapid_mlx_spec_decode_accept_ratio gauge
+rapid_mlx_spec_decode_accept_ratio{family="gemma4",method="mtp"} 0.0
+# HELP rapid_mlx_spec_decode_tokens_saved_total Cumulative bonus tokens emitted from accepted MTP drafts. Equals rapid_mlx_spec_decode_accepts_total under chain MTP (one accept = one bonus token); a future tree MTP variant would let this exceed accepts.
+# TYPE rapid_mlx_spec_decode_tokens_saved_total counter
+rapid_mlx_spec_decode_tokens_saved_total{family="gemma4",method="mtp"} 0
+# HELP rapid_mlx_spec_decode_park_total MTP rounds that ran at K=0 (plain decode, no drafter). Non-zero on prose workloads where drafter cost dominates acceptance — the operator-visible signal that the controller is actively avoiding the drafter cost, not silently stuck at K=1. Under --mtp-disable-auto-k the controller never selects a depth, so this counts only the cold-start round each request opens with (one per request), which is what gives k_cost_ms a K=0 reference in that mode.
+# TYPE rapid_mlx_spec_decode_park_total counter
+rapid_mlx_spec_decode_park_total{family="gemma4",method="mtp"} 0
+# HELP rapid_mlx_spec_decode_k_chosen_total MTP rounds by controller-selected draft depth K (0=park, 1=chain-of-1, 2+=chain-of-K). Emitted as a per-K counter so a dashboard can compute K-share as k_chosen{k="N"} / sum(k_chosen).
+# TYPE rapid_mlx_spec_decode_k_chosen_total counter
+rapid_mlx_spec_decode_k_chosen_total{family="gemma4",method="mtp",k="0"} 0
+# HELP rapid_mlx_spec_decode_k_chosen_rounds_total Total MTP rounds observed by the EV depth controller. Denominator for k_chosen_share: sum(k_chosen_total) should equal this value modulo cold-start races.
+# TYPE rapid_mlx_spec_decode_k_chosen_rounds_total counter
+rapid_mlx_spec_decode_k_chosen_rounds_total{family="gemma4",method="mtp"} 0
+# HELP rapid_mlx_suffix_decode_verify_steps_total Steps that ran a SuffixDecoding verify forward.
+# TYPE rapid_mlx_suffix_decode_verify_steps_total counter
+rapid_mlx_suffix_decode_verify_steps_total{family="gemma4",method="suffix"} 0
+# HELP rapid_mlx_suffix_decode_fallthrough_steps_total Steps that took a plain forward instead of drafting.
+# TYPE rapid_mlx_suffix_decode_fallthrough_steps_total counter
+rapid_mlx_suffix_decode_fallthrough_steps_total{family="gemma4",method="suffix"} 0
+# HELP rapid_mlx_suffix_decode_draft_tokens_proposed_total Draft tokens proposed (sum of K over verify steps).
+# TYPE rapid_mlx_suffix_decode_draft_tokens_proposed_total counter
+rapid_mlx_suffix_decode_draft_tokens_proposed_total{family="gemma4",method="suffix"} 0
+# HELP rapid_mlx_suffix_decode_draft_tokens_accepted_total Draft tokens the target's greedy prediction agreed with.
+# TYPE rapid_mlx_suffix_decode_draft_tokens_accepted_total counter
+rapid_mlx_suffix_decode_draft_tokens_accepted_total{family="gemma4",method="suffix"} 0
+# HELP rapid_mlx_suffix_decode_accept_ratio Accepted / proposed draft tokens. 0.0 when nothing has been proposed.
+# TYPE rapid_mlx_suffix_decode_accept_ratio gauge
+rapid_mlx_suffix_decode_accept_ratio{family="gemma4",method="suffix"} 0.0000
+# HELP rapid_mlx_suffix_decode_errors_total Drafter or verify-forward failures that fell back to a plain step.
+# TYPE rapid_mlx_suffix_decode_errors_total counter
+rapid_mlx_suffix_decode_errors_total{family="gemma4",method="suffix"} 0
+# HELP rapid_mlx_suffix_decode_cooldown_trips_total Times the backoff window re-armed after zero-acceptance verifies.
+# TYPE rapid_mlx_suffix_decode_cooldown_trips_total counter
+rapid_mlx_suffix_decode_cooldown_trips_total{family="gemma4",method="suffix"} 0
+# HELP rapid_mlx_suffix_decode_draft_width Current adaptive draft width K.
+# TYPE rapid_mlx_suffix_decode_draft_width gauge
+rapid_mlx_suffix_decode_draft_width{family="gemma4",method="suffix"} 0
+# HELP rapid_mlx_suffix_decode_backoff_level Current backoff level (0 = drafting every step).
+# TYPE rapid_mlx_suffix_decode_backoff_level gauge
+rapid_mlx_suffix_decode_backoff_level{family="gemma4",method="suffix"} 0
+# HELP rapid_mlx_suffix_decode_fallthrough_total Why a step did not draft, by reason.
+# TYPE rapid_mlx_suffix_decode_fallthrough_total counter
+rapid_mlx_suffix_decode_fallthrough_total{family="gemma4",method="suffix",reason="batch_size"} 0
+rapid_mlx_suffix_decode_fallthrough_total{family="gemma4",method="suffix",reason="uids_size"} 0
+rapid_mlx_suffix_decode_fallthrough_total{family="gemma4",method="suffix",reason="non_greedy"} 0
+rapid_mlx_suffix_decode_fallthrough_total{family="gemma4",method="suffix",reason="logits_processors"} 0
+rapid_mlx_suffix_decode_fallthrough_total{family="gemma4",method="suffix",reason="no_draft"} 0
+rapid_mlx_suffix_decode_fallthrough_total{family="gemma4",method="suffix",reason="cooldown"} 0
+rapid_mlx_suffix_decode_fallthrough_total{family="gemma4",method="suffix",reason="non_trimmable_cache"} 0
+rapid_mlx_suffix_decode_fallthrough_total{family="gemma4",method="suffix",reason="error"} 0
+# HELP rapid_mlx_turboquant_mode Active TurboQuant compression mode (R15 Phase 4). One series per mode label; value is 1 for the active mode and 0 for the others.
+# TYPE rapid_mlx_turboquant_mode gauge
+rapid_mlx_turboquant_mode{mode="disabled"} 1
+rapid_mlx_turboquant_mode{mode="v4"} 0
+rapid_mlx_turboquant_mode{mode="k8v4"} 0
+# HELP rapid_mlx_turboquant_skipped_total Cumulative model loads where TurboQuant was requested but the skip list (sliding-window, MLA, other) forced a fall-back to FP16 KV.
+# TYPE rapid_mlx_turboquant_skipped_total counter
+rapid_mlx_turboquant_skipped_total{reason="sliding-window"} 0
+rapid_mlx_turboquant_skipped_total{reason="mla"} 0
+rapid_mlx_turboquant_skipped_total{reason="other"} 0
+# HELP rapid_mlx_turboquant_fused_kernel Status of the vendored TurboQuant fused Metal kernel — ``available`` means decode runs on the fused path, ``fallback`` means the pure-MLX reference path is in use (functional, slower).
+# TYPE rapid_mlx_turboquant_fused_kernel gauge
+rapid_mlx_turboquant_fused_kernel{status="available"} 1
+rapid_mlx_turboquant_fused_kernel{status="fallback"} 0
+# HELP rapid_mlx_model_requests_total Text-engine requests by terminal outcome and model.
+# TYPE rapid_mlx_model_requests_total counter
+rapid_mlx_model_requests_total{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",outcome="succeeded"} 0
+rapid_mlx_model_requests_total{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",outcome="cancelled"} 0
+rapid_mlx_model_requests_total{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",outcome="failed"} 0
+# HELP rapid_mlx_model_prompt_tokens_total Cumulative prompt tokens processed by the model.
+# TYPE rapid_mlx_model_prompt_tokens_total counter
+rapid_mlx_model_prompt_tokens_total{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c"} 0
+# HELP rapid_mlx_model_completion_tokens_total Cumulative completion tokens processed by the model.
+# TYPE rapid_mlx_model_completion_tokens_total counter
+rapid_mlx_model_completion_tokens_total{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c"} 0
+# HELP rapid_mlx_model_ttft_seconds Time to first token, in seconds, by model.
+# TYPE rapid_mlx_model_ttft_seconds histogram
+rapid_mlx_model_ttft_seconds_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="0.05"} 0
+rapid_mlx_model_ttft_seconds_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="0.1"} 0
+rapid_mlx_model_ttft_seconds_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="0.25"} 0
+rapid_mlx_model_ttft_seconds_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="0.5"} 0
+rapid_mlx_model_ttft_seconds_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="1"} 0
+rapid_mlx_model_ttft_seconds_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="2"} 0
+rapid_mlx_model_ttft_seconds_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="5"} 0
+rapid_mlx_model_ttft_seconds_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="10"} 0
+rapid_mlx_model_ttft_seconds_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="30"} 0
+rapid_mlx_model_ttft_seconds_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="+Inf"} 0
+rapid_mlx_model_ttft_seconds_count{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c"} 0
+rapid_mlx_model_ttft_seconds_sum{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c"} 0.0
+# HELP rapid_mlx_model_decode_tokens_per_second Post-first-token decode speed in tokens per second by model.
+# TYPE rapid_mlx_model_decode_tokens_per_second histogram
+rapid_mlx_model_decode_tokens_per_second_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="1"} 0
+rapid_mlx_model_decode_tokens_per_second_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="5"} 0
+rapid_mlx_model_decode_tokens_per_second_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="10"} 0
+rapid_mlx_model_decode_tokens_per_second_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="20"} 0
+rapid_mlx_model_decode_tokens_per_second_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="50"} 0
+rapid_mlx_model_decode_tokens_per_second_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="100"} 0
+rapid_mlx_model_decode_tokens_per_second_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="200"} 0
+rapid_mlx_model_decode_tokens_per_second_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="500"} 0
+rapid_mlx_model_decode_tokens_per_second_bucket{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c",le="+Inf"} 0
+rapid_mlx_model_decode_tokens_per_second_count{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c"} 0
+rapid_mlx_model_decode_tokens_per_second_sum{model="/Users/styledelk/.cache/huggingface/hub/models--mlx-community--gemma-4-26B-A4B-it-qat-4bit/snapshots/0e3cbab38ce568cf6e23543010d08d03b731910c"} 0.0
+# HELP rapid_mlx_requests_processed_total Cumulative requests that have completed processing.
+# TYPE rapid_mlx_requests_processed_total counter
+rapid_mlx_requests_processed_total 0
+# HELP rapid_mlx_repetition_loop_stops_total Agent generations stopped after an exact repeated-token loop.
+# TYPE rapid_mlx_repetition_loop_stops_total counter
+rapid_mlx_repetition_loop_stops_total 0
+# HELP rapid_mlx_repetition_loop_breaks_total Agent generations steered away from an exact token loop before abort.
+# TYPE rapid_mlx_repetition_loop_breaks_total counter
+rapid_mlx_repetition_loop_breaks_total 0
+# HELP rapid_mlx_prompt_tokens_total Cumulative prompt tokens consumed across all requests.
+# TYPE rapid_mlx_prompt_tokens_total counter
+rapid_mlx_prompt_tokens_total 0
+# HELP rapid_mlx_completion_tokens_total Cumulative completion tokens generated across all requests.
+# TYPE rapid_mlx_completion_tokens_total counter
+rapid_mlx_completion_tokens_total 0
+# HELP rapid_mlx_requests_running Requests currently in the running batch.
+# TYPE rapid_mlx_requests_running gauge
+rapid_mlx_requests_running 0
+# HELP rapid_mlx_requests_waiting Requests queued and waiting for a batch slot.
+# TYPE rapid_mlx_requests_waiting gauge
+rapid_mlx_requests_waiting 0
+# HELP rapid_mlx_steps_executed_total Cumulative scheduler steps executed since engine start.
+# TYPE rapid_mlx_steps_executed_total counter
+rapid_mlx_steps_executed_total 0
+# HELP rapid_mlx_uptime_seconds Engine uptime in seconds.
+# TYPE rapid_mlx_uptime_seconds gauge
+rapid_mlx_uptime_seconds 6156.164
+# HELP rapid_mlx_metal_active_memory_bytes Active Metal memory in bytes.
+# TYPE rapid_mlx_metal_active_memory_bytes gauge
+rapid_mlx_metal_active_memory_bytes 14470000000
+# HELP rapid_mlx_metal_peak_memory_bytes Peak Metal memory in bytes.
+# TYPE rapid_mlx_metal_peak_memory_bytes gauge
+rapid_mlx_metal_peak_memory_bytes 18890000000
+# HELP rapid_mlx_metal_cache_memory_bytes Metal allocator cache in bytes.
+# TYPE rapid_mlx_metal_cache_memory_bytes gauge
+rapid_mlx_metal_cache_memory_bytes 0
+# HELP rapid_mlx_prefix_cache_hits_total Prefix-cache lookups that hit a cached entry.
+# TYPE rapid_mlx_prefix_cache_hits_total counter
+rapid_mlx_prefix_cache_hits_total 0
+# HELP rapid_mlx_prefix_cache_misses_total Prefix-cache lookups that missed.
+# TYPE rapid_mlx_prefix_cache_misses_total counter
+rapid_mlx_prefix_cache_misses_total 0
+# HELP rapid_mlx_prefix_cache_evictions_total Prefix-cache entries evicted by the LRU policy.
+# TYPE rapid_mlx_prefix_cache_evictions_total counter
+rapid_mlx_prefix_cache_evictions_total 0
+# HELP rapid_mlx_prefix_cache_tokens_saved_total Prompt tokens skipped thanks to prefix-cache hits.
+# TYPE rapid_mlx_prefix_cache_tokens_saved_total counter
+rapid_mlx_prefix_cache_tokens_saved_total 0
+# HELP rapid_mlx_prefix_cache_load_skipped_total Prefix-cache entries rejected at disk-load by the per-entry integrity guard (R10-D format-pin: magic, length-prefix, save_uuid, or safetensors body check).
+# TYPE rapid_mlx_prefix_cache_load_skipped_total counter
+rapid_mlx_prefix_cache_load_skipped_total 0
+# HELP rapid_mlx_prefix_cache_save_drift_drops_total Prefix-cache entries dropped at disk-save by the post-write self-verify pass (R12-T1: save_uuid or length-prefix drift between the just-written tokens.bin and the in-flight index.json). A non-zero rate is the save path catching corruption before it reaches cache_dir.
+# TYPE rapid_mlx_prefix_cache_save_drift_drops_total counter
+rapid_mlx_prefix_cache_save_drift_drops_total 0
+# HELP rapid_mlx_prefix_cache_non_trimmable_skips_total Prefix-cache store calls dropped because the cache carried a non-trimmable recurrent-state layer (hybrid GatedDeltaNet / Mamba MoE). Expected to climb on hybrid models — it is the observable signal that the #1025/#1058 recurrent-state leak fix is active. Stays flat when --hybrid-cache-entries > 0 opts into bounded trim-free reuse (#1103).
+# TYPE rapid_mlx_prefix_cache_non_trimmable_skips_total counter
+rapid_mlx_prefix_cache_non_trimmable_skips_total 0
+# HELP rapid_mlx_prefix_cache_cap_bytes Prefix-cache memory ceiling in bytes (resolved from RAPID_MLX_PREFIX_CACHE_MAX_BYTES env override, programmatic max_memory_mb, or the heuristic fraction-of-RAM default).
+# TYPE rapid_mlx_prefix_cache_cap_bytes gauge
+rapid_mlx_prefix_cache_cap_bytes 16746328883
+# HELP rapid_mlx_prefix_cache_current_bytes Prefix-cache memory currently pinned by cached entries, in bytes. Compare to rapid_mlx_prefix_cache_cap_bytes for headroom; the cache evicts LRU entries to stay below the cap.
+# TYPE rapid_mlx_prefix_cache_current_bytes gauge
+rapid_mlx_prefix_cache_current_bytes 4235448320
+# HELP rapid_mlx_prefix_cache_non_trimmable_entries Hybrid (recurrent-state) entries currently retained for trim-free reuse. Bounded by --hybrid-cache-entries; always 0 when that flag is 0 (default).
+# TYPE rapid_mlx_prefix_cache_non_trimmable_entries gauge
+rapid_mlx_prefix_cache_non_trimmable_entries 8
+# HELP rapid_mlx_prefix_cache_radix_hits_total Prefix-cache radix-index lookups that resolved to a stored entry.
+# TYPE rapid_mlx_prefix_cache_radix_hits_total counter
+rapid_mlx_prefix_cache_radix_hits_total 0
+# HELP rapid_mlx_prefix_cache_radix_misses_total Prefix-cache radix-index lookups that resolved to no entry.
+# TYPE rapid_mlx_prefix_cache_radix_misses_total counter
+rapid_mlx_prefix_cache_radix_misses_total 0
+# HELP rapid_mlx_prefix_cache_radix_inserts_total Prefix-cache radix-index inserts (one per cache store).
+# TYPE rapid_mlx_prefix_cache_radix_inserts_total counter
+rapid_mlx_prefix_cache_radix_inserts_total 28
+# HELP rapid_mlx_prefix_cache_radix_removes_total Prefix-cache radix-index removes (LRU evict + explicit remove).
+# TYPE rapid_mlx_prefix_cache_radix_removes_total counter
+rapid_mlx_prefix_cache_radix_removes_total 0
+# HELP rapid_mlx_prefix_cache_radix_deduped_bytes_total Cumulative wire-format bytes that the radix index collapsed into shared prefix nodes — i.e. the on-disk footprint a hash-keyed index would have re-stored. Headline number for the 30-80% footprint-reduction success criterion.
+# TYPE rapid_mlx_prefix_cache_radix_deduped_bytes_total counter
+rapid_mlx_prefix_cache_radix_deduped_bytes_total 337168
+# HELP rapid_mlx_prefix_cache_radix_nodes Live count of radix-tree nodes (one per shared/unique token edge).
+# TYPE rapid_mlx_prefix_cache_radix_nodes gauge
+rapid_mlx_prefix_cache_radix_nodes 8923
+# HELP rapid_mlx_prefix_cache_radix_entries Live count of terminal nodes (== entries the radix indexes).
+# TYPE rapid_mlx_prefix_cache_radix_entries gauge
+rapid_mlx_prefix_cache_radix_entries 14
+# HELP rapid_mlx_prefix_cache_radix_max_depth Deepest path through the radix (longest stored sequence).
+# TYPE rapid_mlx_prefix_cache_radix_max_depth gauge
+rapid_mlx_prefix_cache_radix_max_depth 7315
+# HELP rapid_mlx_prefix_cache_radix_lookup_p50_seconds p50 lookup latency over the last 256 radix queries, in seconds.
+# TYPE rapid_mlx_prefix_cache_radix_lookup_p50_seconds gauge
+rapid_mlx_prefix_cache_radix_lookup_p50_seconds 0.0
+# HELP rapid_mlx_prefix_cache_radix_lookup_p99_seconds p99 lookup latency over the last 256 radix queries, in seconds.
+# TYPE rapid_mlx_prefix_cache_radix_lookup_p99_seconds gauge
+rapid_mlx_prefix_cache_radix_lookup_p99_seconds 0.0
+# HELP rapid_mlx_pflash_bypass_total Requests where PFlash compression engaged and the prefix-cache fetch/store was bypassed.
+# TYPE rapid_mlx_pflash_bypass_total counter
+rapid_mlx_pflash_bypass_total 0
+# HELP rapid_mlx_pflash_compressed_tokens_total Cumulative prompt tokens dropped by PFlash compression (logical minus kept) across all requests.
+# TYPE rapid_mlx_pflash_compressed_tokens_total counter
+rapid_mlx_pflash_compressed_tokens_total 0
+# HELP rapid_mlx_requests_cancelled_total Cumulative requests aborted via the scheduler abort path (client disconnect, explicit cancel route, timeout). Disjoint from rapid_mlx_requests_processed_total which only counts completed requests.
+# TYPE rapid_mlx_requests_cancelled_total counter
+rapid_mlx_requests_cancelled_total 0
+# HELP rapid_mlx_requests_cancelled_via_disconnect_total Subset of rapid_mlx_requests_cancelled_total attributed to client disconnect (force-abort fired from the disconnect_guard streaming-route helper).
+# TYPE rapid_mlx_requests_cancelled_via_disconnect_total counter
+rapid_mlx_requests_cancelled_via_disconnect_total 0
+# HELP rapid_mlx_metal_cap_violations_total Requests rejected at admission because Metal active memory + waiting-request KV reservations + the new request's projected KV would exceed the gpu_memory_utilization soft cap (D-METAL-CAP). Increments on EITHER ``active >= cap`` (sustained over-cap storm) OR ``active + reserved + projected >= cap`` (single large prefill that would push the allocator past cap on its own grow path).
+# TYPE rapid_mlx_metal_cap_violations_total counter
+rapid_mlx_metal_cap_violations_total 0
+# HELP rapid_mlx_prefix_cache_pressure_evictions_total Prefix-cache entries evicted by the Metal-pressure trigger (D-METAL-PFX). Disjoint from rapid_mlx_prefix_cache_evictions_total which counts LRU-on-capacity evictions performed by the cache itself.
+# TYPE rapid_mlx_prefix_cache_pressure_evictions_total counter
+rapid_mlx_prefix_cache_pressure_evictions_total 0
+# HELP rapid_mlx_kv_checkpoint_writes_total Cumulative disk-backed KV checkpoints written at 256-tok boundaries (R15 #296). Counts the safetensors rename, not the in-flight .tmp.
+# TYPE rapid_mlx_kv_checkpoint_writes_total counter
+rapid_mlx_kv_checkpoint_writes_total 0
+# HELP rapid_mlx_kv_checkpoint_loads_total Cumulative disk-backed KV checkpoint reloads through mlx_lm.load_prompt_cache (R15 #296). Increments only on a non-None return — partial / corrupt files are logged but not counted.
+# TYPE rapid_mlx_kv_checkpoint_loads_total counter
+rapid_mlx_kv_checkpoint_loads_total 0
+# HELP rapid_mlx_kv_checkpoint_bytes Live total bytes across every committed disk-backed KV checkpoint under ~/.cache/rapid-mlx/kv_checkpoints/ (R15 #296). Gauge, not counter, because the value drops on oldest-first eviction.
+# TYPE rapid_mlx_kv_checkpoint_bytes gauge
+rapid_mlx_kv_checkpoint_bytes 0
+# HELP rapid_mlx_kv_checkpoint_evictions_total Cumulative oldest-first evictions performed against the disk-backed KV checkpoint root because the byte total crossed RAPID_MLX_KV_CHECKPOINT_MAX_BYTES (R15 #296).
+# TYPE rapid_mlx_kv_checkpoint_evictions_total counter
+rapid_mlx_kv_checkpoint_evictions_total 0
+# HELP rapid_mlx_kv_checkpoint_hook_errors_total Cumulative unexpected exceptions caught by the scheduler's disk-KV hook wrapper. Operators expect this to stay 0 — any non-zero value means the hook is silently bailing on every call (the typos shipped in #919 sat at debug-level for two releases without surfacing; this counter is the regression guard for the same class of bug).
+# TYPE rapid_mlx_kv_checkpoint_hook_errors_total counter
+rapid_mlx_kv_checkpoint_hook_errors_total 0

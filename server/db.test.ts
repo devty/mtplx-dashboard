@@ -189,6 +189,65 @@ test('a v1 database is set aside rather than migrated', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+/* fs.renameSync clobbers silently. The realistic trigger is a user copying
+   their archive back to the live path to inspect it. */
+test('a second set-aside never destroys the first archive', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
+  const file = path.join(dir, 'history.db');
+
+  const makeV1 = (x: number) => {
+    const db = new DatabaseSync(file);
+    db.exec('PRAGMA user_version = 1');
+    db.exec('CREATE TABLE legacy (x INTEGER)');
+    db.exec(`INSERT INTO legacy VALUES (${x})`);
+    db.close();
+  };
+  const rows = (f: string) => {
+    const db = new DatabaseSync(f);
+    try {
+      return (db.prepare('SELECT x FROM legacy').all() as { x: number }[]).map(r => ({ ...r }).x);
+    } finally {
+      db.close();
+    }
+  };
+  const opts = { enabled: true, retentionDays: 30, transcriptRetentionDays: 7 };
+
+  makeV1(42);
+  createStore({ path: file, ...opts }).close();
+  fs.rmSync(file);
+
+  makeV1(7);
+  createStore({ path: file, ...opts }).close();
+
+  assert.deepEqual(rows(path.join(dir, 'history-v1-mtplx.db')), [42], 'first archive was destroyed');
+  assert.deepEqual(rows(path.join(dir, 'history-v1-mtplx.2.db')), [7]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+/* The -wal/-shm move is the whole reason this block exists; without it a stale
+   WAL can be replayed into the fresh database. Sidecars are written as plain
+   files here because setAsideIfStale only tests existence and renames. */
+test('WAL sidecars move with the set-aside database', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
+  const file = path.join(dir, 'history.db');
+
+  const db = new DatabaseSync(file);
+  db.exec('PRAGMA user_version = 1');
+  db.exec('CREATE TABLE legacy (x INTEGER)');
+  db.close();
+  fs.writeFileSync(file + '-wal', 'stale-wal');
+  fs.writeFileSync(file + '-shm', 'stale-shm');
+
+  createStore({ path: file, enabled: true, retentionDays: 30, transcriptRetentionDays: 7 }).close();
+
+  const aside = path.join(dir, 'history-v1-mtplx.db');
+  assert.equal(fs.readFileSync(aside + '-wal', 'utf8'), 'stale-wal');
+  assert.equal(fs.readFileSync(aside + '-shm', 'utf8'), 'stale-shm');
+  assert.equal(fs.existsSync(file + '-wal'), false, 'stale -wal left beside the fresh database');
+  assert.equal(fs.existsSync(file + '-shm'), false, 'stale -shm left beside the fresh database');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('a matching version is left alone', () => {
   const { store, file, dir, cleanup } = tmpStore();
   store.close();

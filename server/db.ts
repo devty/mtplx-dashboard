@@ -314,23 +314,58 @@ class SqliteStore implements Store {
   private setAsideIfStale(file: string): void {
     if (!fs.existsSync(file)) return;
 
-    let version = 0;
-    const probe = new DatabaseSync(file);
-    try {
-      const rows = probe.prepare('PRAGMA user_version').all() as { user_version: number }[];
-      version = rows[0]?.user_version ?? 0;
-    } finally {
-      probe.close();
-    }
+    const version = this.readUserVersionFromHeader(file);
     if (version === 0 || version === SCHEMA_VERSION) return;
 
     const base = file.replace(/\.db$/, '');
-    const aside = `${base}-v${version}-mtplx.db`;
+    /* fs.renameSync overwrites its destination silently, and the aside name is
+       a pure function of (base, version) — so a second set-aside at the same
+       version would destroy the first archive. That is not hypothetical: the
+       likeliest path to it is a user copying their archive back to the live
+       path to look at it, and the next start eating it. Never reuse a name.
+       Uniqueness also guarantees the new aside has no pre-existing -wal/-shm
+       to inherit, which is the corruption this whole block exists to avoid. */
+    let aside = `${base}-v${version}-mtplx.db`;
+    for (let n = 2; fs.existsSync(aside); n++) aside = `${base}-v${version}-mtplx.${n}.db`;
     fs.renameSync(file, aside);
     for (const suffix of ['-wal', '-shm']) {
       if (fs.existsSync(file + suffix)) fs.renameSync(file + suffix, aside + suffix);
     }
     console.warn(`[db] schema v${version} found, expected v${SCHEMA_VERSION}; moved aside to ${aside}`);
+  }
+
+  /** Reads PRAGMA user_version straight out of the SQLite file header (a
+   *  big-endian uint32 at byte offset 60 — see the SQLite file format spec)
+   *  instead of opening a DatabaseSync connection to run the pragma.
+   *
+   *  This matters because a stale/corrupt -wal or -shm can sit next to `file`
+   *  (that is exactly the case setAsideIfStale exists to handle). Opening any
+   *  connection — even one made with `{ readOnly: true }` — makes SQLite's
+   *  WAL-index code memory-map and, if the -shm content doesn't check out,
+   *  rebuild it. That mapping is backed by the file's inode, not its path: it
+   *  can keep landing writes on that inode after this method has already
+   *  called fs.renameSync on it, silently reintroducing real WAL-index bytes
+   *  into what is supposed to be an untouched archived sidecar. Parsing the
+   *  header by hand never maps or opens the file for SQLite, so nothing can
+   *  write to it before the rename. Returns 0 (treated as "not our schema,
+   *  but also not a version to trust") for anything that isn't a well-formed
+   *  SQLite file, which lets the normal open path surface the real error. */
+  private readUserVersionFromHeader(file: string): number {
+    try {
+      const fd = fs.openSync(file, 'r');
+      try {
+        const header = Buffer.alloc(16);
+        if (fs.readSync(fd, header, 0, 16, 0) < 16) return 0;
+        if (header.toString('utf8', 0, 15) !== 'SQLite format 3') return 0;
+        const versionBytes = Buffer.alloc(4);
+        if (fs.readSync(fd, versionBytes, 0, 4, 60) < 4) return 0;
+        return versionBytes.readUInt32BE(0);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      return 0;
+    }
   }
 
   /** Records a failure and logs it at most once per class. Never rethrows. */

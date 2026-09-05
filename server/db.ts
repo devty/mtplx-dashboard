@@ -786,7 +786,14 @@ class SqliteStore implements Store {
   ): number | null {
     if (!this.db) return null;
     try {
-      const shaFromLog = run.committedShas.get('default') ?? null;
+      /* `default` is the usual committer but not the only one: a night where
+         only another source committed still banked work, and reading only
+         `default` stored commit_source='log' beside a NULL sha — which silences
+         the "banked work despite not finishing" callout on exactly the nights
+         that callout exists for. Insertion order, so: first source that
+         committed. */
+      const shaFromLog =
+        run.committedShas.get('default') ?? run.committedShas.values().next().value ?? null;
       const sha = shaFromLog ?? commitFromGit;
       const info = this.db
         .prepare(

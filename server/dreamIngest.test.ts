@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createStore } from './db';
 import { createDreamIngest } from './dreamIngest';
 
@@ -203,6 +204,113 @@ test('a completed log still detects nights that never fired afterwards', () => {
       ['2026-09-04', 'missed'],
       ['2026-09-03', 'ok'],
     ]
+  );
+  store.close();
+});
+
+/* ------------------------------------------------------------------- commits */
+
+const RUN_MEMORABLE_ONLY = [
+  '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+  '[dream-nightly] cycling sources: default memorable',
+  'Dream cycle (partial) in 1.4s:',
+  '  ✓ lint  0 fix(es) applied; 335 non-fixable',
+  '[dream-nightly] stamped last_full_cycle_at for default',
+  '[dream-nightly] global pass (brain-wide phases, once)',
+  '[dream-nightly] WARN: global pass failed (rc=143)',
+  '[dream-nightly:commit] memorable committed 2bb4845',
+  '',
+].join('\n');
+
+test('a night where only a non-default source committed still records the sha', () => {
+  const { store, ingest } = harness(RUN_MEMORABLE_ONLY);
+  ingest.run(Date.parse('2026-09-05T12:00:00'));
+  const run = store.getDreamNight('2026-09-05')?.run;
+  assert.equal(run?.termination, 'warned');
+  assert.equal(run?.commitSource, 'log');
+  assert.equal(
+    run?.committedSha,
+    '2bb4845',
+    'commit_source=log beside a NULL sha silences the banked-work callout'
+  );
+  store.close();
+});
+
+/** A throwaway repo in a temp dir — never the real brain. Without one, every
+ *  dream test pins commit_source to `unavailable` and the log/git/both/none
+ *  branches go unexercised. */
+function gitRepo(dir: string, commits: { date: string; message: string }[]): string {
+  fs.mkdirSync(dir, { recursive: true });
+  execFileSync('git', ['init', '-q', dir], { stdio: 'ignore' });
+  const git = (args: string[], env?: NodeJS.ProcessEnv) =>
+    execFileSync('git', ['-C', dir, ...args], { stdio: 'ignore', env: { ...process.env, ...env } });
+  git(['config', 'user.email', 'test@example.invalid']);
+  git(['config', 'user.name', 'dream test']);
+  for (const c of commits) {
+    git(['commit', '--allow-empty', '-q', '-m', c.message], {
+      GIT_AUTHOR_DATE: c.date,
+      GIT_COMMITTER_DATE: c.date,
+    });
+  }
+  return dir;
+}
+
+function withBrain(logText: string, commits: { date: string; message: string }[]) {
+  const h = harness(logText);
+  const brainDir = gitRepo(path.join(h.dir, 'brain'), commits);
+  return {
+    store: h.store,
+    ingest: createDreamIngest({ store: h.store, logPath: h.logPath, plistPath: path.join(h.dir, 'agent.plist'), brainDir }),
+  };
+}
+
+const DREAM_COMMIT = {
+  date: '2026-09-05T09:00:00-04:00',
+  message: 'dream: auto-commit gbrain writes 2026-09-05',
+};
+
+test('git-only evidence of a commit reports source `git`', () => {
+  const { store, ingest } = withBrain(RUN, [DREAM_COMMIT]);
+  ingest.run(Date.parse('2026-09-05T12:00:00'));
+  const run = store.getDreamNight('2026-09-05')?.run;
+  assert.equal(run?.commitSource, 'git');
+  assert.match(run?.committedSha ?? '', /^[0-9a-f]{7,}$/);
+  store.close();
+});
+
+test('log and git agreeing reports source `both`', () => {
+  const withLogCommit = RUN.replace(
+    '[dream-nightly] Sat Sep  5 08:00:00',
+    '[dream-nightly:commit] default committed abc1234\n[dream-nightly] Sat Sep  5 08:00:00'
+  );
+  const { store, ingest } = withBrain(withLogCommit, [DREAM_COMMIT]);
+  ingest.run(Date.parse('2026-09-05T12:00:00'));
+  assert.equal(store.getDreamNight('2026-09-05')?.run?.commitSource, 'both');
+  store.close();
+});
+
+test('a reachable repo with no dream commit reports `none`, not `unavailable`', () => {
+  const { store, ingest } = withBrain(RUN, [
+    { date: '2026-09-05T09:00:00-04:00', message: 'career-ops: a hand edit' },
+  ]);
+  ingest.run(Date.parse('2026-09-05T12:00:00'));
+  assert.equal(store.getDreamNight('2026-09-05')?.run?.commitSource, 'none');
+  assert.equal(store.getDreamNight('2026-09-05')?.run?.committedSha, null);
+  store.close();
+});
+
+test('the commit window is derived from the run, not a fixed commit count', () => {
+  // 500 unrelated commits after the dream commit would push it past `-n 400`.
+  const filler = Array.from({ length: 500 }, (_, i) => ({
+    date: '2026-09-06T09:00:00-04:00',
+    message: `noise ${i}`,
+  }));
+  const { store, ingest } = withBrain(RUN, [DREAM_COMMIT, ...filler]);
+  ingest.run(Date.parse('2026-09-05T12:00:00'));
+  assert.equal(
+    store.getDreamNight('2026-09-05')?.run?.commitSource,
+    'git',
+    'a commit outside the lookback must not read as "no commit"'
   );
   store.close();
 });

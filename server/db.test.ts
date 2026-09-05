@@ -910,6 +910,36 @@ test('stores a dream run and reads it back as a night', () => {
   cleanup();
 });
 
+test('a commit by a source other than `default` still stores its sha', () => {
+  const { store, cleanup } = tmpStore();
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    '[dream-nightly] WARN: global pass failed (rc=143)',
+    '[dream-nightly:commit] memorable committed 2bb4845',
+  ].join('\n');
+  const [run] = parseDreamLog(text).runs;
+  attributeRun(run);
+  const id = store.insertDreamRun(run, null, 'log');
+  store.upsertDreamNight('2026-09-05', 0, id, 'warned');
+  assert.equal(store.getDreamNight('2026-09-05')?.run?.committedSha, '2bb4845');
+  cleanup();
+});
+
+test('`default` still wins when several sources committed', () => {
+  const { store, cleanup } = tmpStore();
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    '[dream-nightly:commit] memorable committed 2bb4845',
+    '[dream-nightly:commit] default committed e7fd46f',
+  ].join('\n');
+  const [run] = parseDreamLog(text).runs;
+  attributeRun(run);
+  const id = store.insertDreamRun(run, null, 'log');
+  store.upsertDreamNight('2026-09-05', 0, id, 'warned');
+  assert.equal(store.getDreamNight('2026-09-05')?.run?.committedSha, 'e7fd46f');
+  cleanup();
+});
+
 test('insert-if-absent never restates a night that already has a verdict', () => {
   const { store, cleanup } = tmpStore();
   store.upsertDreamNight('2026-09-03', 111, null, 'ok');

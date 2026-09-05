@@ -32,13 +32,28 @@ export interface DreamIngest {
   run(now?: number): DreamIngestResult;
 }
 
-function readCommits(brainDir: string | null): Map<string, string> | null {
+/** `since` is a `YYYY-MM-DD` local date; the window must cover every run being
+ *  ingested. A fixed `-n <count>` cannot: on a real brain repo 400 commits
+ *  reaches back about 72 days against a first-ingest backfill of roughly two
+ *  months, and the margin shrinks as the repo grows. Once a night falls off the
+ *  end, the lookup returns nothing while the check itself "succeeded", so the
+ *  night is recorded `none` — "no commit" — for a night that banked work fine.
+ *  That is the none/unavailable collapse spec section 7 forbids, arriving
+ *  silently and in the false-alarm direction. */
+function readCommits(brainDir: string | null, since: string): Map<string, string> | null {
   if (!brainDir) return null;
   try {
     const out = execFileSync(
       'git',
-      ['-C', brainDir, 'log', '--format=%h %ad %s', '--date=short', '-n', '400'],
-      { encoding: 'utf8', timeout: 10_000 }
+      ['-C', brainDir, 'log', '--format=%h %ad %s', '--date=short', `--since=${since}`],
+      {
+        encoding: 'utf8',
+        timeout: 10_000,
+        /* git's own diagnostics ("fatal: cannot change to …") are noise: every
+           failure below collapses to `unavailable` regardless of the message,
+           and test output must stay pristine. */
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }
     );
     return parseDreamCommits(out);
   } catch {
@@ -62,6 +77,7 @@ class Ingest implements DreamIngest {
   run(now: number = Date.now()): DreamIngestResult {
     const { store, logPath } = this.o;
     let text: string;
+    let bytesRead = 0;
     let baseOffset = store.dreamIngestOffset();
 
     try {
@@ -73,8 +89,16 @@ class Ingest implements DreamIngest {
         if (baseOffset > size) baseOffset = 0;
         const length = size - baseOffset;
         const buf = Buffer.allocUnsafe(length);
-        fs.readSync(fd, buf, 0, length, baseOffset);
-        text = buf.toString('utf8');
+        /* readSync may return short. The buffer is allocUnsafe, so trusting the
+           requested length would decode uninitialised memory into the tail. */
+        let read = 0;
+        while (read < length) {
+          const n = fs.readSync(fd, buf, read, length - read, baseOffset + read);
+          if (n <= 0) break;
+          read += n;
+        }
+        bytesRead = read;
+        text = buf.toString('utf8', 0, read);
       } finally {
         fs.closeSync(fd);
       }
@@ -89,10 +113,13 @@ class Ingest implements DreamIngest {
     }
 
     const parsed = parseDreamLog(text);
+    /* One day of slack: the run's local date and the commit's `--date=short`
+       date can straddle midnight in either direction. */
     const oldestRun = parsed.runs.length
       ? Math.min(...parsed.runs.map((r) => r.startedAt))
       : null;
-    const commits = readCommits(this.o.brainDir);
+    const commits =
+      oldestRun === null ? null : readCommits(this.o.brainDir, localDate(oldestRun - 86_400_000));
     const schedule = readSchedule(this.o.plistPath);
 
     for (const run of parsed.runs) attributeRun(run);
@@ -104,11 +131,16 @@ class Ingest implements DreamIngest {
       const fromLog = run.committedShas.size > 0;
       const fromGit = commits?.get(key) ?? null;
 
+      /* `unavailable` is the LAST resort, not the first. The log's own commit
+         lines are evidence in their own right, so a night that printed one is
+         `log` even when the git cross-check could not run — reporting
+         "couldn't check" over a sha we hold would hide the very disagreement
+         (committed but never finished) the view exists to show. */
       let source: DreamCommitSource;
-      if (commits === null) source = 'unavailable';
-      else if (fromLog && fromGit) source = 'both';
+      if (fromLog && fromGit) source = 'both';
       else if (fromLog) source = 'log';
       else if (fromGit) source = 'git';
+      else if (commits === null) source = 'unavailable';
       else source = 'none';
 
       return store.insertDreamRun(run, fromGit, source);
@@ -148,7 +180,7 @@ class Ingest implements DreamIngest {
     const consumed =
       parsed.lastIncompleteRunOffset !== null
         ? baseOffset + parsed.lastIncompleteRunOffset
-        : baseOffset + Buffer.byteLength(text, 'utf8');
+        : baseOffset + bytesRead;
     store.setDreamIngestOffset(consumed);
 
     return {

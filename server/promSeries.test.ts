@@ -55,6 +55,24 @@ test('dropping model still leaves genuine dimensions', () => {
   assert.equal(n, 'model_requests_total{outcome=failed}');
 });
 
+/* Label values are free-form. Without encoding, {a:'x', b:'y'} and
+   {a:'x,b=y'} both render as m{a=x,b=y} — two unrelated series sharing one
+   persisted key, unrecoverably merged. */
+test('label values that contain separators cannot collide', () => {
+  const flat = seriesName({ name: 'm', labels: { a: 'x', b: 'y' }, value: 0 });
+  const nested = seriesName({ name: 'm', labels: { a: 'x,b=y' }, value: 0 });
+  assert.notEqual(flat, nested);
+  assert.equal(flat, 'm{a=x,b=y}');
+  assert.equal(nested, 'm{a=x%2Cb%3Dy}');
+});
+
+test('braces and percent signs in a label value are encoded', () => {
+  assert.equal(
+    seriesName({ name: 'm', labels: { a: '{100%}' }, value: 0 }),
+    'm{a=%7B100%25%7D}'
+  );
+});
+
 test('a real fixture sample produces a compact series name', () => {
   const s = parsePrometheus(fixture('rapid-mlx-0.13.4-after-first-request.txt'));
   const sample = findSample(s, 'rapid_mlx_model_requests_total', { outcome: 'succeeded' });

@@ -9,6 +9,19 @@ const DROPPED_LABELS = new Set(['model', 'family']);
 
 const PREFIX = 'rapid_mlx_';
 
+/** Percent-encodes the four characters that carry structure in a series name,
+ *  plus `%` itself so the encoding is reversible.
+ *
+ *  Prometheus label values are free-form strings: nothing stops a future
+ *  rapid-mlx version emitting `reason="a,b"`. Unencoded, `{a=x,b=y}` and
+ *  `{a="x,b=y"}` collapse to the identical key, and because these strings are
+ *  persisted, two unrelated series would merge into one history that can never
+ *  be separated again. Encoding is free here and impossible to retrofit once
+ *  rows exist. */
+function encodeLabelValue(v: string): string {
+  return v.replace(/[%,={}]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+}
+
 /** Stable DB key for a sample. Label keys are sorted so the same sample always
  *  produces the same string regardless of scrape ordering — these strings are
  *  persisted, so instability would fragment history into parallel series. */
@@ -22,7 +35,7 @@ export function seriesName(sample: PromSample): string {
     .sort();
   if (!keys.length) return base;
 
-  const parts = keys.map(k => `${k}=${sample.labels[k]}`);
+  const parts = keys.map(k => `${k}=${encodeLabelValue(sample.labels[k])}`);
   return `${base}{${parts.join(',')}}`;
 }
 

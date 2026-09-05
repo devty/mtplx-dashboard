@@ -111,7 +111,80 @@ test('parses dream auto-commit dates out of git log output', () => {
 });
 
 test('parses the whole real log with zero unrecognised lines', () => {
-  for (const f of ['completed-run.txt', 'warned-run.txt', 'truncated-run.txt']) {
+  /* Every committed fixture, not a subset: the two that were skipped both parse
+     clean, and missed-gap.txt is the only one carrying two runs. */
+  for (const f of [
+    'completed-run.txt',
+    'warned-run.txt',
+    'truncated-run.txt',
+    'attribution-trap.txt',
+    'missed-gap.txt',
+  ]) {
     assert.equal(parseDreamLog(fixture(f)).unrecognisedCount, 0, `${f} has unparsed lines`);
   }
+});
+
+test('records where the global pass block starts', () => {
+  const [run] = parseDreamLog(fixture('completed-run.txt')).runs;
+  assert.equal(typeof run.globalPassCycleOrdinal, 'number');
+  const block = run.cycles[run.globalPassCycleOrdinal as number];
+  assert.ok(block, 'the marker must point at a real block');
+  assert.ok(
+    block.phases.some((p) => p.phase === 'synthesize'),
+    'the global pass is the brain-wide block, not a source group'
+  );
+});
+
+test('a run with no global pass marker records null', () => {
+  const [run] = parseDreamLog(fixture('truncated-run.txt')).runs;
+  assert.equal(run.globalPassCycleOrdinal, null);
+});
+
+test('an unparseable run timestamp is counted, not silently NaN', () => {
+  // Date.parse knows EDT/EST/UTC/GMT and little else; CEST returns NaN. The
+  // line matched the run-boundary shape, so nothing downstream would notice.
+  const r = parseDreamLog(
+    ['[dream-nightly] Sat Sep  5 07:05:06 CEST 2026 starting', 'Dream cycle (ok) in 1.0s:'].join('\n')
+  );
+  assert.equal(r.runs.length, 0, 'no run may be opened on an unreadable timestamp');
+  assert.ok(r.unrecognisedCount >= 1, 'and the drift canary must see it');
+});
+
+test('an unparseable run timestamp does not attach its lines to the previous run', () => {
+  const r = parseDreamLog(
+    [
+      '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+      'Dream cycle (ok) in 1.0s:',
+      '  ✓ lint  fine',
+      '[dream-nightly] Sun Sep  6 07:05:06 CEST 2026 starting',
+      'Dream cycle (ok) in 2.0s:',
+      '  ✓ lint  also fine',
+    ].join('\n')
+  );
+  assert.equal(r.runs.length, 1);
+  assert.equal(r.runs[0].cycles.length, 1, 'the orphaned block must not join run 1');
+});
+
+test('an unparseable done timestamp still completes the run', () => {
+  const [run] = parseDreamLog(
+    [
+      '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+      '[dream-nightly] Sat Sep  5 08:00:00 CEST 2026 done (dream exit=0)',
+    ].join('\n')
+  ).runs;
+  assert.equal(run.termination, 'completed');
+  assert.equal(run.endedAt, null);
+});
+
+test('a drifted cycling-sources or stamped line trips the canary', () => {
+  // These used to sit in the noise list behind their own regexes, so a format
+  // change could only ever be swallowed there.
+  const r = parseDreamLog(
+    [
+      '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+      '[dream-nightly] cycling sources = default calendar',
+      '[dream-nightly] stamped last_full_cycle for default',
+    ].join('\n')
+  );
+  assert.equal(r.unrecognisedCount, 2);
 });

@@ -173,7 +173,6 @@ class Ingest implements DreamIngest {
       }
     }
 
-
     /* Rewind to the last unterminated run so it is re-read next pass; a run
        that was `running` when we parsed it would otherwise be frozen in that
        state forever. */

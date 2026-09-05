@@ -125,6 +125,7 @@ h2 {
 .srow { padding: 6px 0; border-bottom: 1px solid var(--grid); font-size: 12.5px; }
 .srow:last-child { border-bottom: none; }
 .srow b { color: var(--ink); }
+.attr { font-size: 10.5px; color: var(--muted); letter-spacing: 0.02em; }
 .mark-ran     { color: var(--s2); font-weight: 600; }
 .mark-noop    { color: var(--s3); font-weight: 600; }
 .mark-skipped { opacity: 0.5; }
@@ -241,26 +242,48 @@ async function detail(date) {
     head += '<span class="muted">Commit status could not be checked.</span>';
   else if (r.commitSource === 'none')
     head += '<span class="muted">No commit for this night.</span>';
-  else head += 'Committed <code>' + esc(r.committedSha) + '</code> <span class="muted">(' + esc(r.commitSource) + ')</span>';
+  else if (r.committedSha)
+    head += 'Committed <code>' + esc(r.committedSha) + '</code> <span class="muted">(' + esc(r.commitSource) + ')</span>';
+  else
+    // A commit is recorded but no sha came with it. Say exactly that rather
+    // than rendering an empty <code> and calling it a sha.
+    head += 'Commit recorded <span class="muted">(' + esc(r.commitSource) + ') — no sha captured</span>';
   if (r.termination !== 'completed' && r.committedSha)
     head += ' <b class="callout">— banked work despite not finishing.</b>';
   head += '</div>';
 
-  const bySource = new Map();
+  /* Three kinds of row, in this order: one per source, then the brain-wide
+     global pass, then whatever could not be placed. The global pass is the
+     largest single block in a normal night and belongs to no source — folding
+     it into "(unattributed)" would drown the bucket that carries real doubt. */
+  const groups = new Map();
+  const groupFor = (key, label, rank) => {
+    if (!groups.has(key)) groups.set(key, { label, rank, phases: [], attributions: new Set() });
+    return groups.get(key);
+  };
   for (const p of d.phases) {
-    const key = p.sourceId || '(unattributed)';
-    if (!bySource.has(key)) bySource.set(key, []);
-    bySource.get(key).push(p);
+    const g = p.scope === 'global'
+      ? groupFor('\u0000global', 'global pass', 1)
+      : p.sourceId
+        ? groupFor('s:' + p.sourceId, p.sourceId, 0)
+        : groupFor('\u0000none', '(unattributed)', 2);
+    g.phases.push(p);
+    if (p.scope !== 'global' && p.sourceId && p.attribution) g.attributions.add(p.attribution);
   }
 
   let body = '';
-  for (const [source, phases] of bySource) {
-    body += '<div class="srow"><b>' + esc(source) + '</b>&nbsp; ';
-    body += phases.map((p) =>
+  for (const g of [...groups.values()].sort((a, b) => a.rank - b.rank)) {
+    body += '<div class="srow"><b>' + esc(g.label) + '</b>';
+    /* How we reached the attribution, not just what it says. Section 2.2's
+       whole warning is that the inferred ones are the fallible ones. */
+    if (g.attributions.size)
+      body += ' <span class="attr">' + esc([...g.attributions].join(', ')) + '</span>';
+    body += '&nbsp; ';
+    body += g.phases.map((p) =>
       '<span class="mark-' + esc(p.mark) + '" title="' + esc(p.phase) + ': ' + esc(p.text) + '">' +
       (p.mark === 'ran' ? '✓' : p.mark === 'noop' ? '!' : '−') + '</span>').join(' ');
     body += '</div>';
-    for (const p of phases) {
+    for (const p of g.phases) {
       for (const f of JSON.parse(p.failuresJson || '[]'))
         body += '<div class="fail">✗ ' + esc(f.slug) + ': ' + esc(f.message) + '</div>';
     }

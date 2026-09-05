@@ -99,7 +99,7 @@ test('creates the schema successfully', () => {
   cleanup();
 });
 
-test('v3 schema has the transcript and dream tables', () => {
+test('the current schema has the transcript and dream tables', () => {
   const { read, cleanup } = tmpStore();
   const tables = read<{ name: string }>(
     `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`
@@ -907,6 +907,33 @@ test('stores a dream run and reads it back as a night', () => {
   assert.equal(detail.run?.commitSource, 'both');
   assert.equal(detail.phases.length, 2);
   assert.equal(detail.phases.find((p) => p.phase === 'extract_facts')?.mark, 'noop');
+  cleanup();
+});
+
+test('the global pass round-trips as its own scope, not as a source', () => {
+  const { store, cleanup } = tmpStore();
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    '[dream-nightly] cycling sources: default',
+    'Dream cycle (partial) in 1.4s:',
+    '  ✓ lint  0 fix(es) applied',
+    '[dream-nightly] stamped last_full_cycle_at for default',
+    '[dream-nightly] global pass (brain-wide phases, once)',
+    'Dream cycle (partial) in 9424.8s:',
+    '  ✓ synthesize  no synthesis submitted',
+    '[dream-nightly] global pass ok',
+  ].join('\n');
+  const [run] = parseDreamLog(text).runs;
+  attributeRun(run);
+  const id = store.insertDreamRun(run, null, 'none');
+  store.upsertDreamNight('2026-09-05', 0, id, 'warned');
+
+  const phases = store.getDreamNight('2026-09-05')!.phases;
+  assert.equal(phases.find((p) => p.phase === 'lint')?.scope, 'source');
+  const global = phases.find((p) => p.phase === 'synthesize');
+  assert.equal(global?.scope, 'global');
+  assert.equal(global?.sourceId, null);
+  assert.equal(global?.attribution, 'stamped');
   cleanup();
 });
 

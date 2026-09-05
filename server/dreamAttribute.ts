@@ -17,7 +17,12 @@
  *  Applying the intuitive rule files default's heaviest work under calendar:
  *  the busiest source looks idle and a trivial one looks enormous, silently.
  *
- *  The disambiguator is the phase set. The two groups are disjoint, so a
+ *  The brain-wide global pass is the one block that needs none of this: it is
+ *  announced by its own marker line, which dreamParse records positionally as
+ *  `globalPassCycleOrdinal`. It is labelled `scope: 'global'` and rendered as
+ *  its own row rather than being attributed to any source.
+ *
+ *  The disambiguator for everything else is the phase set. The two groups are disjoint, so a
  *  block's own phases say which group it is, and therefore which stamp it
  *  belongs to. When the phases match neither group we return `unknown` rather
  *  than guessing — confidently-wrong attribution in an ops view gets acted on,
@@ -47,6 +52,18 @@ export const MIXED_PHASES: ReadonlySet<string> = new Set([
 
 export function attributeRun(run: DreamRunRecord): void {
   for (const cycle of run.cycles) {
+    /* The brain-wide pass announced itself on the line before this block, so
+       its identity is known outright — no phase-set inference, no stamp walk.
+       Checked first: its phase set matches neither group, so falling through
+       would file the run's single largest block as `unknown` and dilute the
+       bucket whose whole meaning is "we could not work this out". */
+    if (run.globalPassCycleOrdinal === cycle.ordinal) {
+      cycle.scope = 'global';
+      cycle.sourceId = null;
+      cycle.attribution = 'stamped';
+      continue;
+    }
+
     const names = cycle.phases.map((p) => p.phase);
     const heavy = names.some((n) => MIXED_PHASES.has(n));
     const light = names.some((n) => PER_SOURCE_PHASES.has(n));

@@ -88,3 +88,32 @@ test('a heavy block before any stamp in the run is unknown, not guessed', () => 
   assert.equal(run.cycles[0].sourceId, null);
   assert.equal(run.cycles[0].attribution, 'unknown');
 });
+
+test('THE GLOBAL PASS IS ITS OWN ROW, NOT UNATTRIBUTED', () => {
+  const [run] = parseDreamLog(fixture('completed-run.txt')).runs;
+  attributeRun(run);
+
+  const global = run.cycles.filter((c) => c.scope === 'global');
+  assert.equal(global.length, 1, 'exactly one brain-wide pass per run');
+  assert.equal(global[0].sourceId, null, 'it belongs to no source');
+  assert.equal(global[0].attribution, 'stamped', 'the marker line states it outright');
+  assert.ok(
+    global[0].phases.some((p) => p.phase === 'synthesize'),
+    'and it is the brain-wide block: the largest single thing in the run'
+  );
+});
+
+test('every other block stays scoped to a source', () => {
+  const [run] = parseDreamLog(fixture('completed-run.txt')).runs;
+  attributeRun(run);
+  for (const c of run.cycles) {
+    if (c.scope === 'global') continue;
+    assert.equal(c.scope, 'source', `block ${c.ordinal} changed scope`);
+  }
+});
+
+test('the trap fixture has no global pass and none is invented', () => {
+  const [run] = parseDreamLog(fixture('attribution-trap.txt')).runs;
+  attributeRun(run);
+  assert.equal(run.cycles.some((c) => c.scope === 'global'), false);
+});

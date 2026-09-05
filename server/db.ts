@@ -1,9 +1,9 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { DreamRunRecord } from './dreamParse';
+import type { DreamRunRecord, DreamAttribution, DreamCycleScope, DreamTermination } from './dreamParse';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export type DreamCommitSource = 'log' | 'git' | 'both' | 'none' | 'unavailable';
 export type DreamNightStatus = 'ok' | 'warned' | 'truncated' | 'missed' | 'unknown';
@@ -20,7 +20,10 @@ export interface DreamNightRow {
 
 export interface DreamPhaseRow {
   sourceId: string | null;
-  attribution: string;
+  attribution: DreamAttribution;
+  /** `global` is the brain-wide pass, which belongs to no source and is not
+   *  unattributed either — see dreamAttribute.ts. */
+  scope: DreamCycleScope;
   phase: string;
   mark: string;
   text: string;
@@ -36,7 +39,7 @@ export interface DreamNightDetail {
     endedAt: number | null;
     exitCode: number | null;
     globalPassRc: number | null;
-    termination: string;
+    termination: DreamTermination;
     committedSha: string | null;
     commitSource: DreamCommitSource;
   } | null;
@@ -284,7 +287,8 @@ const DDL = `
     ordinal      INTEGER NOT NULL,
     duration_s   REAL    NOT NULL,
     source_id    TEXT,
-    attribution  TEXT    NOT NULL
+    attribution  TEXT    NOT NULL,
+    scope        TEXT    NOT NULL DEFAULT 'source'
   );
   CREATE INDEX IF NOT EXISTS dream_cycle_run ON dream_source_cycle(run_id);
 
@@ -295,6 +299,7 @@ const DDL = `
     source_id     TEXT,
     phase         TEXT    NOT NULL,
     mark          TEXT    NOT NULL,
+    scope         TEXT    NOT NULL DEFAULT 'source',
     raw_text      TEXT    NOT NULL,
     failure_count INTEGER NOT NULL DEFAULT 0,
     failures_json TEXT
@@ -828,13 +833,13 @@ class SqliteStore implements Store {
       this.db.prepare('DELETE FROM dream_source_cycle WHERE run_id = ?').run(runId);
 
       const insCycle = this.db.prepare(
-        `INSERT INTO dream_source_cycle (run_id, ordinal, duration_s, source_id, attribution)
-         VALUES (?, ?, ?, ?, ?) RETURNING id`
+        `INSERT INTO dream_source_cycle (run_id, ordinal, duration_s, source_id, attribution, scope)
+         VALUES (?, ?, ?, ?, ?, ?) RETURNING id`
       );
       const insPhase = this.db.prepare(
         `INSERT INTO dream_phase
-           (run_id, cycle_id, source_id, phase, mark, raw_text, failure_count, failures_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+           (run_id, cycle_id, source_id, phase, mark, scope, raw_text, failure_count, failures_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
 
       for (const cycle of run.cycles) {
@@ -843,7 +848,8 @@ class SqliteStore implements Store {
           cycle.ordinal,
           cycle.durationS,
           cycle.sourceId,
-          cycle.attribution
+          cycle.attribution,
+          cycle.scope
         ) as { id: number };
         for (const p of cycle.phases) {
           insPhase.run(
@@ -852,6 +858,7 @@ class SqliteStore implements Store {
             cycle.sourceId,
             p.phase,
             p.mark,
+            cycle.scope,
             p.text,
             p.failures.length,
             p.failures.length ? JSON.stringify(p.failures) : null
@@ -966,7 +973,7 @@ class SqliteStore implements Store {
       const phases = night.runId
         ? (this.db
             .prepare(
-              `SELECT source_id AS sourceId, phase, mark, raw_text AS text,
+              `SELECT source_id AS sourceId, phase, mark, scope, raw_text AS text,
                       failure_count AS failureCount, failures_json AS failuresJson,
                       (SELECT attribution FROM dream_source_cycle c WHERE c.id = p.cycle_id)
                         AS attribution

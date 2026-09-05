@@ -11,6 +11,7 @@
 export type DreamMark = 'ran' | 'skipped' | 'noop';
 export type DreamTermination = 'completed' | 'warned' | 'truncated' | 'running';
 export type DreamAttribution = 'stamped' | 'inferred' | 'unknown';
+export type DreamCycleScope = 'source' | 'global';
 
 export interface DreamItemFailure {
   slug: string;
@@ -31,6 +32,10 @@ export interface DreamCycleBlock {
   /** Filled in by dreamAttribute.ts, not here. */
   sourceId: string | null;
   attribution: DreamAttribution;
+  /** Filled in by dreamAttribute.ts, not here. `global` is the brain-wide pass
+   *  (spec section 6 wants it as its own row, not folded into a source and not
+   *  dumped into the unattributed bucket, which exists to carry real doubt). */
+  scope: DreamCycleScope;
   /** Index into DreamRunRecord.stamps of the stamp immediately preceding this
    *  block. -1 when the block precedes every stamp. Attribution needs this and
    *  it is only knowable while scanning. */
@@ -50,6 +55,11 @@ export interface DreamRunRecord {
   /** source id -> sha, from [dream-nightly:commit] lines. */
   committedShas: Map<string, string>;
   cycles: DreamCycleBlock[];
+  /** Ordinal of the cycle block that follows the `global pass (brain-wide
+   *  phases, once)` marker, or null when the run never printed one. Purely
+   *  positional — what the marker MEANS is dreamAttribute's call. May point one
+   *  past the end when the run died before the pass emitted a block. */
+  globalPassCycleOrdinal: number | null;
   /** Byte offset of this run's `starting` line within the parsed text. */
   offset: number;
 }
@@ -70,6 +80,11 @@ const RE_WARN = /^\[dream-nightly\]\s+WARN: global pass failed \(rc=(-?\d+)\)$/;
 const RE_SOURCES = /^\[dream-nightly\]\s+cycling sources:\s*(.*?)\s*$/;
 const RE_STAMP = /^\[dream-nightly\]\s+stamped last_full_cycle_at for (\S+)$/;
 const RE_COMMIT = /^\[dream-nightly:commit\]\s+(\S+)\s+committed\s+(\S+)$/;
+/* The brain-wide pass announces itself, then emits one ordinary `Dream cycle`
+   block. Without capturing the marker that block is indistinguishable from a
+   source's, and lands in the unattributed bucket — burying the largest single
+   thing in the run under the label that is supposed to mean "we don't know". */
+const RE_GLOBAL_PASS = /^\[dream-nightly\] global pass \(brain-wide phases, once\)$/;
 /* The parenthesised word is a completion reason ("partial", "ok", and
    presumably others we haven't seen yet) — not part of the grammar we care
    about, so it is matched but not captured. Every reason must land here: if a
@@ -90,8 +105,11 @@ const NOISE = [
   /^No stale pages/,
   /^ {2}totals: /,
   /^\[dream-nightly:(patch|export|mtplx|parity|commit|orphans)\]/,
-  /^\[dream-nightly\] (global pass|cycling sources|stamped)/,
-  /^\[dream-nightly\] (Dream|WARN)/,
+  /* `global pass brain dir: …` and `global pass ok`. The `(brain-wide phases,
+     once)` marker is NOT noise and is consumed above. `cycling sources` and
+     `stamped` are deliberately absent: they have their own regexes, so a
+     variant either matches those or must trip the drift canary. */
+  /^\[dream-nightly\] global pass /,
   // Post-cycle extraction summaries (incremental extract runs outside the
   // per-source Dream cycle block, after a phase like text-import lands).
   /^Extract --stale: /,
@@ -122,8 +140,22 @@ export function parseDreamLog(text: string): DreamParseResult {
 
     const start = RE_START.exec(line);
     if (start) {
+      /* Date.parse only understands a handful of timezone abbreviations — CEST,
+         BST and JST all return NaN where EDT/EST/UTC/GMT parse. The line MATCHED
+         the run-boundary shape, so nothing downstream would notice: NaN flows
+         into localDate() as "NaN-NaN-NaN" and into a NOT NULL INTEGER column.
+         Refuse to open the run and count it, so the drift canary is loud. */
+      const startedAt = Date.parse(start[1]);
+      if (!Number.isFinite(startedAt)) {
+        run = null;
+        cycle = null;
+        lastPhase = null;
+        unrecognisedCount++;
+        if (unrecognisedSamples.length < 20) unrecognisedSamples.push(line);
+        continue;
+      }
       run = {
-        startedAt: Date.parse(start[1]),
+        startedAt,
         endedAt: null,
         exitCode: null,
         globalPassRc: null,
@@ -132,6 +164,7 @@ export function parseDreamLog(text: string): DreamParseResult {
         stamps: [],
         committedShas: new Map(),
         cycles: [],
+        globalPassCycleOrdinal: null,
         offset: lineOffset,
       };
       runs.push(run);
@@ -144,7 +177,10 @@ export function parseDreamLog(text: string): DreamParseResult {
 
     const done = RE_DONE.exec(line);
     if (done) {
-      run.endedAt = Date.parse(done[1]);
+      /* The `done` line itself is the evidence of completion; its timestamp is
+         decoration, so an unparseable one costs the end time, not the verdict. */
+      const endedAt = Date.parse(done[1]);
+      run.endedAt = Number.isFinite(endedAt) ? endedAt : null;
       run.exitCode = Number(done[2]);
       run.termination = 'completed';
       cycle = null;
@@ -176,6 +212,13 @@ export function parseDreamLog(text: string): DreamParseResult {
       continue;
     }
 
+    if (RE_GLOBAL_PASS.test(line)) {
+      /* The next block opened is the global pass's. Recorded as a position, not
+         resolved to a meaning — that is dreamAttribute's job. */
+      run.globalPassCycleOrdinal = run.cycles.length;
+      continue;
+    }
+
     const cyc = RE_CYCLE.exec(line);
     if (cyc) {
       cycle = {
@@ -184,6 +227,7 @@ export function parseDreamLog(text: string): DreamParseResult {
         phases: [],
         sourceId: null,
         attribution: 'unknown',
+        scope: 'source',
         precedingStampIndex: run.stamps.length - 1,
       };
       run.cycles.push(cycle);

@@ -481,6 +481,11 @@ function fmtDuration(s) {
    2px surface ring, crosshair + tooltip on hover. Single series → no legend;
    the card title names it. */
 function makeSpark(el, opts) {
+  /* An inert renderer when the card is not on this page, or is hidden until
+     its metric goes live. Construction happens at module scope, before any
+     card is conditionally shown, so one missing element must never take the
+     whole script — and with it every renderer and the SSE wiring — down. */
+  if (!el) return { render() {} };
   const tip = document.createElement('div');
   tip.className = 'tip';
   el.appendChild(tip);
@@ -748,11 +753,14 @@ function renderSparks() {
   sparks.prefill.render(r.prefill);
   sparks.ttft.render(r.ttft);
   sparks.accept.render(r.accept);
-  const vals = r.accept.filter(v => v != null);
-  $('spark-accept-cap').textContent = vals.length
-    ? fmt((vals.reduce((a, b) => a + b, 0) / vals.length) * 100, 1) + '% mean over ' +
-      vals.length + (rangeMs === null ? ' requests' : ' buckets')
-    : '—';
+  const cap = $('spark-accept-cap');
+  if (cap) {
+    const vals = r.accept.filter(v => v != null);
+    cap.textContent = vals.length
+      ? fmt((vals.reduce((a, b) => a + b, 0) / vals.length) * 100, 1) + '% mean over ' +
+        vals.length + (rangeMs === null ? ' requests' : ' buckets')
+      : '—';
+  }
 }
 
 function setRange(value) {

@@ -4,6 +4,18 @@ import path from 'node:path';
 
 export const SCHEMA_VERSION = 2;
 
+/** Two derived origins this close describe the same process.
+ *
+ *  `started_at` is derived as `now - uptime * 1000`, and `now` and `uptime` are
+ *  sampled independently, so the value wanders by milliseconds between
+ *  observations — and by more across a dashboard restart, where the derivation
+ *  starts over. Exact-match keying therefore mints a new run every time the
+ *  DASHBOARD restarts, fragmenting one inference process into many rows.
+ *
+ *  A genuine restart moves the origin by the whole previous uptime, so no real
+ *  pair of runs lands inside this window. */
+export const RUN_IDENTITY_TOLERANCE_MS = 30_000;
+
 export interface StoreOptions {
   /** SQLite file path. Its parent directory is created if missing. */
   path: string;
@@ -391,10 +403,24 @@ class SqliteStore implements Store {
   upsertRun(info: RunInfo, now: number): number | null {
     if (!this.db) return null;
     try {
+      /* Adopt the nearest run whose origin is within tolerance rather than
+         requiring an exact match — see RUN_IDENTITY_TOLERANCE_MS. */
       const existing = this.db
-        .prepare('SELECT id FROM run WHERE target_id = ? AND started_at = ?')
-        .get(info.targetId, info.startedAt) as { id: number } | undefined;
-      if (existing) return existing.id;
+        .prepare(
+          `SELECT id FROM run
+            WHERE target_id = ? AND ABS(started_at - ?) <= ?
+            ORDER BY ABS(started_at - ?) LIMIT 1`
+        )
+        .get(info.targetId, info.startedAt, RUN_IDENTITY_TOLERANCE_MS, info.startedAt) as
+        | { id: number }
+        | undefined;
+
+      if (existing) {
+        /* The process is demonstrably still running, so clear any ended_at a
+           previous false-restart stamped on it. */
+        this.db.prepare('UPDATE run SET ended_at = NULL WHERE id = ?').run(existing.id);
+        return existing.id;
+      }
 
       /* Close this target's open runs only — another target's run is unrelated
          and must not be ended by this one restarting. */

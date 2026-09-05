@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { createStore, SCHEMA_VERSION, REQUEST_SERIES } from './db';
+import { createStore, SCHEMA_VERSION, REQUEST_SERIES, RUN_IDENTITY_TOLERANCE_MS } from './db';
 import type { RunInfo, RunRow, RunDetail, RequestRow } from './db';
 
 const DAY = 86_400_000;
@@ -379,6 +379,76 @@ test('upsertRun on a disabled store returns null', () => {
   assert.equal(store.upsertRun(runInfo('qwen', 2), 3), null);
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+/* Run identity must survive a dashboard restart: runTracker re-derives
+   `started_at` as `now - uptime * 1000` from scratch on every dashboard
+   process start, and independent sampling of `now`/`uptime` means the result
+   wanders by a few ms between dashboard lifetimes even though the underlying
+   inference process never restarted. See RUN_IDENTITY_TOLERANCE_MS. */
+
+test('a dashboard restart does not mint a second run', () => {
+  const { store, read, cleanup } = tmpStore();
+  const a = store.upsertRun(runInfo('qwen', 1_788_600_081_483), 1_788_600_082_000);
+  const b = store.upsertRun(runInfo('qwen', 1_788_600_081_486), 1_788_600_083_000);
+  assert.equal(typeof a, 'number');
+  assert.equal(b, a);
+  assert.equal(read<RunRow>(RUNS).length, 1);
+  cleanup();
+});
+
+test('adopting a nearby run reopens one wrongly closed by this same bug', () => {
+  const { store, read, file, cleanup } = tmpStore();
+  const id = store.upsertRun(runInfo('qwen', 1_788_600_081_483), 1_788_600_082_000);
+
+  // Simulate a previous dashboard restart that falsely stamped ended_at.
+  const db = new DatabaseSync(file);
+  db.prepare('UPDATE run SET ended_at = ? WHERE id = ?').run(1_788_630_490_195, id as number);
+  db.close();
+  assert.equal(read<RunRow>(RUNS).find(r => r.id === id)?.ended_at, 1_788_630_490_195);
+
+  const again = store.upsertRun(runInfo('qwen', 1_788_600_081_486), 1_788_630_600_000);
+  assert.equal(again, id);
+  assert.equal(read<RunRow>(RUNS).find(r => r.id === id)?.ended_at, null);
+  cleanup();
+});
+
+test('a genuine restart (origin outside tolerance) still creates a new run', () => {
+  const { store, read, cleanup } = tmpStore();
+  const first = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_001_000);
+  const second = store.upsertRun(runInfo('qwen', 1_700_000_000_000 + 3_600_000), 1_700_000_001_000 + 3_600_000);
+  assert.notEqual(second, first);
+
+  const rows = read<RunRow>(RUNS);
+  assert.equal(rows.find(r => r.id === first)?.ended_at, 1_700_000_001_000 + 3_600_000);
+  assert.equal(rows.find(r => r.id === second)?.ended_at, null);
+  cleanup();
+});
+
+test('identity tolerance does not cross target boundaries', () => {
+  const { store, read, cleanup } = tmpStore();
+  const qwen = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_001_000);
+  const gemma = store.upsertRun(runInfo('gemma', 1_700_000_000_000), 1_700_000_001_000);
+  assert.notEqual(gemma, qwen);
+  assert.equal(read<RunRow>(RUNS).length, 2);
+  cleanup();
+});
+
+test('adoption prefers the nearest run when more than one is in range', () => {
+  const { store, cleanup } = tmpStore();
+  // 40s apart so neither adopts the other while being created.
+  const gap = RUN_IDENTITY_TOLERANCE_MS + 10_000;
+  const first = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_000_500);
+  const second = store.upsertRun(runInfo('qwen', 1_700_000_000_000 + gap), 1_700_000_000_500 + gap);
+  assert.notEqual(second, first);
+
+  // 1s from `second`'s origin, comfortably within tolerance of both — nearest wins.
+  const adopted = store.upsertRun(
+    runInfo('qwen', 1_700_000_000_000 + gap + 1_000),
+    1_700_000_000_500 + gap + 1_000
+  );
+  assert.equal(adopted, second);
+  cleanup();
 });
 
 /* ---------------------------------------------------------------------- */

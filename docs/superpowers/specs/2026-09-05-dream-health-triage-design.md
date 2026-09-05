@@ -1,7 +1,11 @@
 # Dream-health triage for the dashboard
 
 Date: 2026-09-05
-Status: approved design, pending implementation plan
+Status: implemented. Amended 2026-09-05 after the whole-branch review, so this document
+describes what actually shipped — §4 (numerics, `scope`, schema version), §5
+(incrementality's window contract) and §6/§10 (Trends) were corrected rather than left
+promising things the code does not do. This is binding authority; a wrong spec is worse
+than no spec.
 Branch: `dream-health-triage` (cut from `rapid-mlx-prometheus`)
 
 ## 1. Context
@@ -133,8 +137,9 @@ Four failure modes, all required:
 
 Four dream tables added to the existing `data/history.db` alongside `run` / `request` /
 `transcript` / `gauge`, plus a single-row `dream_ingest` table holding the byte offset §5
-requires. `SCHEMA_VERSION` goes 2 → 3; the existing set-aside path handles the mismatch by
-moving the old file aside, so no migration is written.
+requires. `SCHEMA_VERSION` goes 2 → 4 (3 added the tables; 4 added the `scope` column below);
+the existing set-aside path handles the mismatch by moving the old file aside, so no migration
+is written.
 
 - **`dream_run`** — one row per `starting` line.
   `started_at`, `ended_at`, `exit_code`, `global_pass_rc`, `committed_sha`,
@@ -147,15 +152,24 @@ moving the old file aside, so no migration is written.
   second, structured signal can land later without a rewrite.
 
 - **`dream_source_cycle`** — one row per `Dream cycle … in Ns:` block.
-  `run_id`, `ordinal`, `duration_s`, `source_id` (nullable), and
-  `attribution` ∈ `stamped` | `inferred` | `unknown`.
+  `run_id`, `ordinal`, `duration_s`, `source_id` (nullable),
+  `attribution` ∈ `stamped` | `inferred` | `unknown`, and `scope` ∈ `source` | `global`.
+  `scope` exists because the brain-wide pass belongs to no source and is not *unattributed*
+  either: it announces itself with its own marker line, and §6 renders it as its own row.
+  Folding the largest block in the run into the bucket that means "we could not work this
+  out" would dilute the one signal §4.1 exists to protect.
 
 - **`dream_phase`** — one row per `✓ / - / !` line.
-  `run_id`, `cycle_id`, `source_id` (nullable), `phase`, `mark`, `raw_text`, plus parsed
-  numerics where a known phase shape yields them, and nested `✗` items as
-  `failure_count` (INTEGER) plus `failures_json` (TEXT, `[{slug, message}]`). These stay
-  on the row rather than becoming a fifth table: they are small, bounded, and never read
-  apart from their parent phase.
+  `run_id`, `cycle_id`, `source_id` (nullable), `phase`, `mark`, `scope`, `raw_text`, and
+  nested `✗` items as `failure_count` (INTEGER) plus `failures_json` (TEXT,
+  `[{slug, message}]`). These stay on the row rather than becoming a fifth table: they are
+  small, bounded, and never read apart from their parent phase.
+  **No parsed numerics.** An earlier draft of this section promised "parsed numerics where a
+  known phase shape yields them"; no such columns were built and none are needed yet. Every
+  number in the log is preserved verbatim in `raw_text`, which is what the view renders, and
+  a per-phase numeric schema would have to be guessed shape-by-shape from human-readable
+  output — exactly the brittleness §1.1 accepted only where it buys something. It is a
+  seam for later, alongside §10, not a shipped feature.
 
 - **`dream_night`** — one row per *expected* schedule slot, derived rather than parsed.
   `date`, `expected_at`, `run_id` (nullable), `status` ∈ `ok` | `warned` | `truncated` |
@@ -200,6 +214,17 @@ end-of-file, so a run that was `running` at parse time is re-evaluated instead o
 in that state. First ingest parses the whole file, backfilling existing history in one
 pass.
 
+**The rewind's consequence, and the rule it imposes.** Because of that rewind, every pass
+after the first sees only a *tail* of the history. Anything that derives a window from the
+runs in hand and then writes over that window will restate — and overwrite — nights it never
+looked at, turning a correct `ok` into a fabricated `missed` on a re-ingest of unchanged
+bytes. So: a pass may write authoritatively only within the window it actually parsed
+(earliest parsed run's calendar day → now), and may make a `missed` claim outside that window
+only where no row exists at all. The forward edge (the log ends on a completed run, so a later
+pass parses nothing, yet "last night never ran" still needs saying) is handled by that
+insert-only path, never by widening the authoritative window. This is a direct instance of §7:
+a false `missed` is an invented alarm, and it lands on the exact night someone is reading.
+
 **Configuration.** `GBRAIN_LOG_PATH`, `GBRAIN_BRAIN_DIR`, `GBRAIN_DREAM_PLIST`, each
 defaulting to current locations, mirroring the existing `MTPLX_URL` convention.
 
@@ -221,8 +246,13 @@ being folded into a source.
 cross-check disagree — no `done` line but a commit exists, as on Sep 5 — the view states
 both. That disagreement is diagnostic and is the user's to interpret.
 
-**Trends** occupy a subordinate strip: lint remaining, orphan ratio, atom yield across
-the loaded window.
+**Trends — NOT SHIPPED.** The original design gave trends (lint remaining, orphan ratio,
+atom yield across the loaded window) a subordinate strip. No such strip was built, and §10's
+deferral does not cover it: those three trends derive from stored `raw_text`, not from the
+structured signals §10 defers. They are deferred here, explicitly and on their own terms —
+each needs a per-phase numeric extraction that §4 deliberately does not have, and inventing
+one to fill a strip would put guessed numbers on an ops screen. Revisit together with §4's
+numerics seam.
 
 ## 7. Error handling
 
@@ -280,6 +310,10 @@ one; page verification stays manual, as `CLAUDE.md` documents.
 - **No `.err` parsing.** It is progress heartbeats by design; its size carries no signal.
 
 ## 10. Deferred
+
+The Trends strip (§6) and the per-phase numeric extraction it would need (§4). Both are
+deferred for the same reason and land on the same seam: `raw_text` holds every number the log
+prints, so nothing is lost, and neither is guessed.
 
 The structured-signal enrichment (querying gbrain's Postgres for `last_full_cycle_at`
 stamps, `dream_verdicts`, `gbrain_cycle_locks`, orphan and take counts) is deliberately

@@ -1,10 +1,10 @@
 # rapid-mlx Dashboard
 
-A realtime dashboard and run-comparison view for a local rapid-mlx inference server on Apple
-Silicon. A small Node/TypeScript server scrapes rapid-mlx's Prometheus `/metrics`
-endpoint itself and pushes updates to the browser over Server-Sent Events — all four pages
-(`public/index.html`, `public/log.html`, `public/detail.html`, `public/history.html`) stay plain
-HTML/CSS/JS, no client framework, no build step for the frontend.
+A realtime dashboard, run-comparison view, and nightly-dream health view for a local rapid-mlx
+inference server on Apple Silicon. A small Node/TypeScript server scrapes rapid-mlx's Prometheus
+`/metrics` endpoint itself and pushes updates to the browser over Server-Sent Events — all five
+pages (`public/index.html`, `public/log.html`, `public/detail.html`, `public/history.html`,
+`public/dream.html`) stay plain HTML/CSS/JS, no client framework, no build step for the frontend.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
@@ -95,6 +95,7 @@ npm run dev
 # then open:
 #   http://127.0.0.1:8123/              → dashboard
 #   http://127.0.0.1:8123/history.html  → run history & comparison
+#   http://127.0.0.1:8123/dream.html    → gbrain nightly-dream health
 ```
 
 `npm run dev` runs the TypeScript server directly (via `tsx watch`, auto-restarting on change) —
@@ -137,6 +138,9 @@ The server scrapes one configured rapid-mlx target — set these as environment 
 | `PRUNE_INTERVAL_MS`          | `3600000`                             | How often the prune runs.                            |
 | `HEALTH_INTERVAL_MS`         | `5000`                                | `/health`+`/v1/status`+`/v1/models` poll cadence.    |
 | `GAUGE_PERSIST_INTERVAL_MS`  | `10000`                               | Gauge persistence interval — much slower than the scrape itself; unchanged series are also skipped, since ~74 series at 1 Hz would be ~6.4M rows/day. |
+| `GBRAIN_LOG_PATH`            | `~/.gbrain/dream-nightly.log`         | Nightly-dream log the Dream page parses (read-only).  |
+| `GBRAIN_BRAIN_DIR`           | `~/mybrain`                           | Brain repo for the read-only `git log` commit cross-check. Unreadable yields "couldn't check", which the page keeps distinct from "no commit". |
+| `GBRAIN_DREAM_PLIST`         | `~/Library/LaunchAgents/com.gbrain.dream-nightly.plist` | LaunchAgent the dream schedule is read from. Without it, missed-night detection disables itself rather than assuming an hour. |
 
 ```bash
 RAPID_MLX_TARGETS='qwen=http://box.local:8000:8010' npm run dev
@@ -160,8 +164,14 @@ mtplx-dashboard/
 │   ├── db.ts              SQLite persistence: schema v2, writes/queries via node:sqlite,
 │   │                        bucketed range queries, pruning
 │   ├── db.test.ts, promParse.test.ts, promSeries.test.ts, runTracker.test.ts,
-│   │   targets.test.ts, promScraper.test.ts    node:test unit tests (npm test)
-│   ├── fixtures/          Golden Prometheus scrapes captured from live servers
+│   │   targets.test.ts, promScraper.test.ts, dream*.test.ts   node:test unit tests (npm test)
+│   ├── dreamParse.ts      Pure parser for gbrain's nightly-dream log
+│   ├── dreamAttribute.ts  Which cycle block belongs to which source (and the global pass)
+│   ├── dreamSchedule.ts   Expected nights from the LaunchAgent plist; missed-night detection
+│   ├── dreamIngest.ts     The only dream module doing I/O: log + git cross-check + store writes
+│   ├── dreamService.ts    Dream config resolution and the 30s ingest cache
+│   ├── fixtures/          Golden Prometheus scrapes captured from live servers, plus
+│   │                      dream/ — verbatim nightly-dream log excerpts
 │   ├── sse.ts             SSE client registry, broadcast, heartbeat
 │   ├── config.ts          Env var → config
 │   └── types.ts           Shared RingBuffers / StatePayload shapes
@@ -169,7 +179,8 @@ mtplx-dashboard/
 │   ├── index.html         Metrics dashboard (with live/1h/24h/7d history range selector)
 │   ├── log.html           Explains why the live log is unavailable this phase
 │   ├── detail.html        Same, for the old per-request permalink target
-│   └── history.html       Run history: run table, config diff, discovered gauge charts
+│   ├── history.html       Run history: run table, config diff, discovered gauge charts
+│   └── dream.html         gbrain nightly-dream health: night strip, per-source phase marks
 ├── data/                SQLite history file lives here by default (DB_PATH, gitignored)
 ├── docs/                Design docs under docs/superpowers/specs/ (no current README screenshot —
 │                        the MTPLX-era one was removed; see the Dashboard section above)

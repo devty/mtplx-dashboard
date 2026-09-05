@@ -51,13 +51,17 @@ golden fixtures in `server/fixtures/`, including families that only appear after
 `promSeries.test.ts` (series-name derivation, counter deltas, restart detection),
 `runTracker.test.ts` (run identity from `uptime_seconds`, including the derived-origin restart
 case), `targets.test.ts` (`RAPID_MLX_TARGETS` parsing), `promScraper.test.ts` (per-interval
-sparkline derivation, cumulative-vs-gauge classification), and `db.test.ts` (the SQLite
-persistence layer) — all against a throwaway on-disk SQLite file in a temp directory, not
-`:memory:`, because an in-memory database is private to the connection that opened it and the
-tests assert through a second read connection. There is no frontend test harness; verify page
-changes by loading them against a real rapid-mlx server. The server scrapes a single configured
-target via `RAPID_MLX_TARGETS` (default `qwen=http://127.0.0.1:8000:8010`); see `.env.example` for
-the full list of env vars.
+sparkline derivation, cumulative-vs-gauge classification), `db.test.ts` (the SQLite
+persistence layer), and the dream suite — `dreamParse.test.ts`, `dreamAttribute.test.ts`,
+`dreamSchedule.test.ts`, `dreamIngest.test.ts` and `dreamService.test.ts`, covering gbrain
+nightly-dream log parsing, source attribution, missed-night derivation, ingest and caching
+against fixtures in `server/fixtures/dream/` — all against a throwaway on-disk SQLite file in a
+temp directory, not `:memory:`, because an in-memory database is private to the connection that
+opened it and the tests assert through a second read connection. There is no frontend test
+harness; verify page changes by loading them against a real rapid-mlx server. The server scrapes
+a single configured target via `RAPID_MLX_TARGETS` (default `qwen=http://127.0.0.1:8000:8010`);
+see `.env.example` for the full list of env vars, including the dream page's `GBRAIN_LOG_PATH`,
+`GBRAIN_BRAIN_DIR` and `GBRAIN_DREAM_PLIST`.
 
 ## Architecture
 
@@ -124,6 +128,31 @@ the full list of env vars.
   comma-joined string (safe for `REQUEST_SERIES`, whose two names never contain a comma) or
   repeated `?names=` query params collected into an array by Express — required for gauge series,
   whose names can carry more than one label and therefore a literal comma (see Conventions).
+
+### Dream health (`public/dream.html`, `GET /api/dream/nights[/:date]`)
+A fifth page, fed by parsing gbrain's append-only nightly-dream log — not by polling anything.
+Fetch-on-load with a 30-second ingest cache; no SSE. Five modules, and the split between them is
+load-bearing:
+- `dreamParse.ts` — pure. Text in, records out; no I/O, no clock, no DB. Unrecognised lines are
+  counted rather than swallowed: that count is the format-drift canary and is shown in the UI, so
+  anything with its own regex (`cycling sources`, `stamped`) must never also sit in the noise list.
+- `dreamAttribute.ts` — which cycle block belongs to which source. Separated because it is the
+  part most likely to be wrong: a source emits a second, heavy block *after* its own stamp, so the
+  intuitive "next stamp wins" rule files the busiest source's work under a trivial one. It answers
+  `unknown` rather than guessing, and labels the brain-wide block `scope: 'global'`.
+- `dreamSchedule.ts` — pure, injected clock. Derives expected nights from the LaunchAgent plist.
+  No schedule means no missed-night claims (never a hardcoded hour). The window is derived from
+  local calendar days over the evidence the caller vouches for — widening it past that overwrites
+  nights an earlier pass got right.
+- `dreamIngest.ts` — the only module that touches the outside world: reads the log from a stored
+  byte offset, shells `git log --since=<oldest parsed run>` in the brain repo, writes through the
+  store. `unavailable` (could not check) and `none` (checked, nothing there) are different answers
+  and must stay different all the way to the page.
+- `dreamService.ts` — config resolution plus the cache. I/O-free at construction.
+
+The governing rule for the whole feature is in
+`docs/superpowers/specs/2026-09-05-dream-health-triage-design.md` §7: **never invent an alarm, and
+never take the dashboard down.**
 
 ### Data model
 rapid-mlx's `/metrics` is standard Prometheus text exposition — families, types (`counter` /
@@ -200,8 +229,9 @@ just works without re-running JS.
 
 ### Styling
 CSS variables under `:root` define a light palette; a `@media (prefers-color-scheme: dark)` block
-overrides the same variable names for dark mode. `index.html`, `log.html`, `detail.html`, and
-`history.html` all duplicate this token block — keep them in sync when adjusting the palette.
+overrides the same variable names for dark mode. `index.html`, `log.html`, `detail.html`,
+`history.html` and `dream.html` all duplicate this token block — keep them in sync when adjusting
+the palette.
 Layout is a 12-column CSS grid of `.card` elements with `span` modifier classes (`.hero`, `.wide`,
 `.third`, `.half` in `index.html`; `history.html` only needs plain `.card`) and breakpoints at
 1080px and 680px.

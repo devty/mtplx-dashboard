@@ -9,6 +9,12 @@ import type { Store } from './db';
 import type { Target } from './targets';
 import type { RingBuffers, StatePayload } from './types';
 
+/* These start EMPTY on every dashboard restart, and that is structural, not a
+   gap to be fixed. MTPLX shipped a `recent[]` rolling window that the old
+   poller seeded from, so a fresh tab got deep history instantly. A Prometheus
+   scrape exposes only current values — there is no past to seed from. Depth
+   rebuilds as requests complete. Do not "restore" this by synthesising points
+   from counters; a fabricated history is worse than a short one. */
 const rings: RingBuffers = { decode: [], prefill: [], ttft: [], accept: [] };
 const counters = new CounterState();
 /** Last persisted value per series, so unchanged series are not rewritten. */
@@ -62,11 +68,23 @@ export function deriveSamples(
   };
 }
 
-/** True for families whose stored value must be a per-interval delta. */
-function isCumulative(s: PromScrape, name: string): boolean {
-  if (name.endsWith('_bucket') || name.endsWith('_sum') || name.endsWith('_count')) return true;
+/** True for families whose stored value must be a per-interval delta.
+ *
+ *  The DECLARED type decides whenever there is one — never the name. Suffix
+ *  sniffing looks equivalent and is not: rapid-mlx already ships gauges whose
+ *  names end in a counter-ish suffix (`..._seconds_max`, `..._per_second_last`),
+ *  and a future gauge named `..._count` would be silently differenced into
+ *  nonsense by a name-first rule.
+ *
+ *  Only a name with NO type line of its own falls through, which in this format
+ *  means a histogram component (`_bucket`/`_sum`/`_count` carry no TYPE line —
+ *  their parent family does). Those are cumulative exactly when that parent is
+ *  a histogram. */
+export function isCumulative(s: PromScrape, name: string): boolean {
+  const declared = s.families.get(name)?.type;
+  if (declared) return declared === 'counter';
   const base = name.replace(/_(bucket|sum|count)$/, '');
-  return s.families.get(name)?.type === 'counter' || s.families.get(base)?.type === 'histogram';
+  return s.families.get(base)?.type === 'histogram';
 }
 
 function persistGauges(s: PromScrape, now: number): void {

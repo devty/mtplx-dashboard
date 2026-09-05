@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parsePrometheus } from './promParse';
 import { CounterState } from './promSeries';
-import { deriveSamples } from './promScraper';
+import { deriveSamples, isCumulative } from './promScraper';
 
 const read = (n: string) =>
   fs.readFileSync(path.join(__dirname, 'fixtures', n), 'utf8');
@@ -68,4 +68,34 @@ test('a counter reset yields nulls rather than a spike', () => {
   assert.equal(restarted.completedDelta, null);
   assert.equal(restarted.decode, null);
   assert.equal(restarted.ttft, null);
+});
+
+/* The declared type must beat the name. rapid-mlx already ships gauges whose
+   names end in a counter-ish suffix, so a name-first rule silently differences
+   them into nonsense. */
+test('isCumulative trusts the declared type over the name', () => {
+  const s = parsePrometheus(
+    '# TYPE a_total counter\na_total 1\n' +
+    '# TYPE b_seconds histogram\nb_seconds_bucket{le="1"} 1\nb_seconds_sum 0.5\nb_seconds_count 1\n' +
+    '# TYPE b_seconds_max gauge\nb_seconds_max 0.5\n' +
+    '# TYPE c_count gauge\nc_count 7\n' +
+    '# TYPE d gauge\nd 3\n'
+  );
+  assert.equal(isCumulative(s, 'a_total'), true, 'declared counter');
+  assert.equal(isCumulative(s, 'b_seconds_bucket'), true, 'histogram component');
+  assert.equal(isCumulative(s, 'b_seconds_sum'), true, 'histogram component');
+  assert.equal(isCumulative(s, 'b_seconds_count'), true, 'histogram component');
+  assert.equal(isCumulative(s, 'b_seconds_max'), false, 'declared gauge on a histogram family');
+  assert.equal(isCumulative(s, 'c_count'), false, 'gauge whose NAME ends in _count');
+  assert.equal(isCumulative(s, 'd'), false, 'plain gauge');
+});
+
+test('isCumulative classifies the real fixture families correctly', () => {
+  const s = parsePrometheus(AFTER);
+  assert.equal(isCumulative(s, 'rapid_mlx_requests_processed_total'), true);
+  assert.equal(isCumulative(s, 'rapid_mlx_model_ttft_seconds_bucket'), true);
+  assert.equal(isCumulative(s, 'rapid_mlx_model_ttft_seconds_count'), true);
+  assert.equal(isCumulative(s, 'rapid_mlx_model_decode_tokens_per_second_last'), false);
+  assert.equal(isCumulative(s, 'rapid_mlx_model_ttft_seconds_max'), false);
+  assert.equal(isCumulative(s, 'rapid_mlx_uptime_seconds'), false);
 });

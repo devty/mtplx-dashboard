@@ -58,7 +58,10 @@ Commit-level, prefixed `[dream-nightly:commit]`:
 
 Cycle blocks, unprefixed:
 
-- `Dream cycle (partial) in <N>s:` opens a block.
+- `Dream cycle (<reason>) in <N>s:` opens a block. **Two reasons occur:** `partial`
+  (63 occurrences) and `ok` (29) — matching only `partial` drops a third of all blocks.
+  Worse, a dropped opener leaves the previous block open, so the next source's phase
+  lines append to it. Match any reason word.
 - `  <mark> <phase>  <text>` where mark is `✓` (ran), `-` (skipped: cooldown or disabled),
   or `!` (ran but applied nothing).
 - `      ✗ <slug>: <message>` — a nested per-item failure under a phase line.

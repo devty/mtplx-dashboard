@@ -2,24 +2,28 @@ import express from 'express';
 import path from 'node:path';
 import { config } from './config';
 import { createStore, REQUEST_SERIES } from './db';
-import * as poller from './metricsPoller';
+import * as scraper from './promScraper';
 import * as healthPoller from './healthPoller';
 import * as sse from './sse';
 
 const app = express();
+
+const target = config.targets[0]; // Phase 1 is single-target
+
 const store = createStore({
   path: path.isAbsolute(config.dbPath)
     ? config.dbPath
     : path.join(__dirname, '..', config.dbPath),
   enabled: config.persistEnabled,
   retentionDays: config.retentionDays,
+  transcriptRetentionDays: config.transcriptRetentionDays,
 });
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 app.get('/api/events', (req, res) => {
   sse.addClient(res);
-  sse.sendSnapshot(res, poller.getSnapshot());
+  sse.sendSnapshot(res, scraper.getSnapshot());
   req.on('close', () => sse.removeClient(res));
 });
 
@@ -27,7 +31,7 @@ app.get('/api/events', (req, res) => {
 // page's own code path since the SSE 'snapshot' event on connect already
 // covers initial load.
 app.get('/api/metrics', (_req, res) => {
-  res.json(poller.getSnapshot());
+  res.json(scraper.getSnapshot());
 });
 
 /** Parses the shared from/to/buckets/names query shape. `buckets` is clamped
@@ -45,11 +49,15 @@ function parseRange(q: Record<string, unknown>, fallbackNames: string[]) {
   return { from, to, buckets, names };
 }
 
+/** Target for a history query. Falls back to the single configured target, so
+ *  existing URLs without ?target= keep working. */
+function queryTarget(q: Record<string, unknown>): string {
+  return typeof q.target === 'string' && q.target ? q.target : target.id;
+}
+
 app.get('/api/history/series', (req, res) => {
-  const { from, to, buckets, names } = parseRange(
-    req.query as Record<string, unknown>,
-    Object.keys(REQUEST_SERIES)
-  );
+  const q = req.query as Record<string, unknown>;
+  const { from, to, buckets, names } = parseRange(q, Object.keys(REQUEST_SERIES));
   // `in` walks the prototype chain (so `?names=constructor` would slip past a
   // `n in REQUEST_SERIES` check and reach querySeries, whose Object.hasOwn
   // guard would then throw and escape this handler as a 500). Object.hasOwn
@@ -62,12 +70,22 @@ app.get('/api/history/series', (req, res) => {
     });
     return;
   }
-  res.json(store.querySeries(names, from, to, buckets));
+  res.json(store.querySeries(queryTarget(q), names, from, to, buckets));
 });
 
 app.get('/api/history/gauges', (req, res) => {
-  const { from, to, buckets, names } = parseRange(req.query as Record<string, unknown>, []);
-  res.json(store.queryGauges(names, from, to, buckets));
+  const q = req.query as Record<string, unknown>;
+  const { from, to, buckets, names } = parseRange(q, []);
+  res.json(store.queryGauges(queryTarget(q), names, from, to, buckets));
+});
+
+/** Series present in the gauge table for a target. The set is discovered, not
+ *  hardcoded — it differs by backend and grows after first traffic (59/73/80
+ *  across the committed fixtures). Safe to expose dynamically because gauge
+ *  names are bound as parameters, unlike REQUEST_SERIES. */
+app.get('/api/history/gauge-names', (req, res) => {
+  const t = typeof req.query.target === 'string' ? req.query.target : target.id;
+  res.json({ target: t, names: store.gaugeNames(t) });
 });
 
 app.get('/api/history/runs', (req, res) => {
@@ -91,29 +109,24 @@ app.get('/api/history/runs/:id', (req, res) => {
 });
 
 const server = app.listen(config.port, () => {
-  console.log(`mtplx-dashboard listening on :${config.port}, polling ${config.mtplxUrl}`);
+  console.log(`mtplx-dashboard listening on :${config.port}, scraping ${target.label} (${target.upstreamUrl})`);
 });
 
-let shuttingDown = false;
-
-/* healthPoller first and awaited: its first poll establishes the run that
-   metricsPoller tags every request row with, so there is no nullable-run
-   window at boot. The shuttingDown guard matters because this chain is not
-   cancellable — a signal arriving during that first in-flight /health poll
-   would otherwise start the metrics poller after shutdown() had already run. */
-void healthPoller.start(store, () => sse.broadcastTick(poller.getSnapshot())).then(() => {
-  if (!shuttingDown) poller.start(store);
-});
+/* healthPoller starts first, synchronously — no run to establish and no await
+   chain to race with shutdown() any more, unlike the old MTPLX-era boot. It
+   must still run before the scraper starts so the scraper's first observe()
+   call has engine_type/context_window available (see runTracker). */
+healthPoller.start(target);
+scraper.start(target, store);
 
 const heartbeat = sse.startHeartbeat();
 const pruneTimer = setInterval(() => store.prune(Date.now()), config.pruneIntervalMs);
 store.prune(Date.now()); // one prune at boot, so a long downtime is cleaned up immediately
 
 function shutdown(): void {
-  shuttingDown = true;
   clearInterval(heartbeat);
   clearInterval(pruneTimer);
-  poller.stop();
+  scraper.stop();
   healthPoller.stop();
   store.close();
   server.close(() => process.exit(0));

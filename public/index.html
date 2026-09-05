@@ -287,38 +287,34 @@ footer code { font: 11px ui-monospace, Menlo, monospace; }
 
     <!-- ===================================================== HERO -->
     <section class="card hero">
-      <h2>Speculative decoding</h2>
-      <div class="subtitle">Multi-token prediction — tokens drafted ahead, verified, and committed per target-model pass</div>
+      <h2>Throughput</h2>
+      <div class="subtitle">Decode rate, unified-memory headroom and queue depth for the live rapid-mlx target</div>
       <div class="hero-grid">
 
         <div>
-          <div class="hero-figure"><span id="hero-speedup">—</span><span class="unit">tok / pass</span></div>
-          <div class="hero-label">tokens committed per verify call — an autoregressive decoder yields 1.0</div>
+          <div class="hero-figure"><span id="hero-decode">—</span><span class="unit">tok / s</span></div>
+          <div class="hero-label">decode rate of the most recently completed request, as measured by the engine</div>
           <div class="hero-stats">
-            <div class="kv"><span class="k">Overall acceptance</span><span class="v" id="h-accept">—</span></div>
-            <div class="kv"><span class="k">Drafted tokens</span><span class="v" id="h-drafted">—</span></div>
-            <div class="kv"><span class="k">Accepted tokens</span><span class="v" id="h-accepted">—</span></div>
-            <div class="kv"><span class="k">Bonus tokens</span><span class="v" id="h-bonus">—</span></div>
-            <div class="kv"><span class="k">Correction tokens</span><span class="v" id="h-corr">—</span></div>
-            <div class="kv"><span class="k">Verify calls</span><span class="v" id="h-verify">—</span></div>
+            <div class="kv"><span class="k">Fastest seen</span><span class="v" id="h-decode-max">—</span></div>
+            <div class="kv"><span class="k">TTFT (mean, interval)</span><span class="v" id="h-ttft">—</span></div>
+            <div class="kv"><span class="k">Prefill rate</span><span class="v" id="h-prefill">—</span></div>
+            <div class="kv"><span class="k">Requests completed</span><span class="v" id="h-completed">—</span></div>
+            <div class="kv"><span class="k">Prompt tokens</span><span class="v" id="h-prompt-tok">—</span></div>
+            <div class="kv"><span class="k">Completion tokens</span><span class="v" id="h-completion-tok">—</span></div>
           </div>
         </div>
 
         <div>
-          <div id="depths"></div>
-          <div class="legend">
-            <span class="key"><span class="swatch" style="background:var(--s1)"></span>accepted</span>
-            <span class="key"><span class="swatch" style="background:var(--blue-track)"></span>drafted (not accepted)</span>
-            <span class="key" style="margin-left:auto">thin meter = mean accept probability</span>
+          <div class="hero-figure"><span id="hero-mem">—</span><span class="unit">GB active</span></div>
+          <div class="hero-label">Metal unified memory held by the model — peak is the high-water mark for this run</div>
+          <div class="hero-stats">
+            <div class="kv"><span class="k">Peak</span><span class="v" id="h-mem-peak">—</span></div>
+            <div class="kv"><span class="k">Cache</span><span class="v" id="h-mem-cache">—</span></div>
+            <div class="kv"><span class="k">Running</span><span class="v" id="h-running">—</span></div>
+            <div class="kv"><span class="k">Waiting</span><span class="v" id="h-waiting">—</span></div>
+            <div class="kv"><span class="k">Uptime</span><span class="v" id="h-uptime">—</span></div>
+            <div class="kv"><span class="k">Version</span><span class="v" id="h-version">—</span></div>
           </div>
-        </div>
-
-        <div>
-          <div style="font-size:12.5px;color:var(--ink-2);font-weight:600">Acceptance rate, recent requests</div>
-          <div class="spark tall" id="spark-accept"></div>
-          <div class="spark-cap" id="spark-accept-cap">—</div>
-          <div class="kv" style="margin-top:14px"><span class="k">Last request</span><span class="v" id="h-lastreq">—</span></div>
-          <div class="kv"><span class="k">MTP depth</span><span class="v" id="h-depth">—</span></div>
         </div>
 
       </div>
@@ -360,14 +356,6 @@ footer code { font: 11px ui-monospace, Menlo, monospace; }
     </section>
 
     <!-- ===================================================== ROW 3 -->
-    <section class="card half">
-      <h2>Verify-time breakdown</h2>
-      <div class="subtitle">Where instrumented decode work goes — share of measured components (phases can overlap wall-clock)</div>
-      <div class="strip" id="v-strip" style="height:22px"></div>
-      <div class="rows" id="v-rows"></div>
-      <div class="mini-note">Decode wall-clock: <span id="v-wall" style="font-variant-numeric:tabular-nums">—</span></div>
-    </section>
-
     <section class="card">
       <h2>KV cache</h2>
       <div style="margin:10px 0 4px; display:flex; gap:8px; align-items:center;">
@@ -413,6 +401,12 @@ let rings = { decode: [], prefill: [], ttft: [], accept: [] };
 let lastChangeAt = null;
 let lastOkAt = null;
 let connected = false;
+
+/* The payload's `series` map is keyed exactly like the gauge table, so the
+   client never reimplements the parser. */
+let series = {};
+let version = null;
+let contextWindow = null;
 
 /* null = live (render the server's in-memory rings); a number = window width in
    ms, rendered from bucketed history via /api/history/series. */
@@ -460,7 +454,27 @@ function fmtAgo(ms) {
   return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm ago';
 }
 const clock = d => d.toLocaleTimeString('en-US', { hour12: false });
-const sum = a => (a || []).reduce((x, y) => x + (y || 0), 0);
+
+function sv(name) {
+  const v = series[name];
+  return typeof v === 'number' && isFinite(v) ? v : null;
+}
+
+/* fmt(n, d), fmtInt(n), fmtCompact(n), fmtSec(s) and fmtAgo(ms) above take no
+   unit suffix, which every stat row below wants, so this one is added
+   alongside them rather than changing any of the five. */
+function fmtNum(n, digits, suffix) {
+  if (n === null || n === undefined || !isFinite(n)) return '—';
+  return n.toFixed(digits) + (suffix || '');
+}
+function fmtGB(bytes) {
+  return bytes === null ? '—' : (bytes / 1e9).toFixed(2) + ' GB';
+}
+function fmtDuration(s) {
+  if (s === null) return '—';
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h}h ${m}m` : `${m}m`;
+}
 
 /* ================================================================= sparkline
    Hand-rolled SVG sparkline: 2px line, 10% area wash, 8px end-dot with a
@@ -554,54 +568,33 @@ const sparks = {
 };
 
 /* ================================================================= renderers */
-function renderHero(m) {
-  const drafted = sum(m.drafted_by_depth), accepted = sum(m.accepted_by_depth);
-  const perPass = (m.verify_calls > 0 && m.completion_tokens != null)
-    ? m.completion_tokens / m.verify_calls : null;
+function renderHero() {
+  const decode = sv('model_decode_tokens_per_second_last');
+  $('hero-decode').textContent = decode === null ? '—' : decode.toFixed(1);
+  $('h-decode-max').textContent = fmtNum(sv('model_decode_tokens_per_second_max'), 1, ' tok/s');
 
-  $('hero-speedup').textContent = perPass != null ? fmt(perPass, 2) : '—';
-  $('h-accept').textContent   = drafted > 0 ? fmt(accepted / drafted * 100, 1) + '%' : '—';
-  $('h-drafted').textContent  = fmtInt(drafted);
-  $('h-accepted').textContent = fmtInt(accepted);
-  $('h-bonus').textContent    = fmtInt(m.bonus_tokens);
-  $('h-corr').textContent     = fmtInt(m.correction_tokens);
-  $('h-verify').textContent   = fmtInt(m.verify_calls);
-  $('h-depth').textContent    = m.mtp_depth != null ? String(m.mtp_depth) : '—';
-  $('h-lastreq').textContent  =
-    (m.completion_tokens != null && m.request_elapsed_s != null)
-      ? `${fmtInt(m.completion_tokens)} tok in ${fmt(m.request_elapsed_s, 1)} s` : '—';
+  /* Mean over the interval, not a single request: TTFT has no _last gauge, so
+     it is only ever Δsum/Δcount. See spec section 4.2. */
+  const ring = rings.ttft || [];
+  const lastTtft = [...ring].reverse().find(v => v !== null) ?? null;
+  $('h-ttft').textContent = lastTtft === null ? '—' : (lastTtft * 1000).toFixed(0) + ' ms';
 
-  /* per-depth bars: drafted = track, accepted = fill (part-to-whole, one ramp) */
-  const box = $('depths');
-  const acc  = m.accepted_by_depth || [];
-  const drf  = m.drafted_by_depth || [];
-  const prob = m.mean_accept_probability_by_depth || [];
-  const nD = Math.max(acc.length, drf.length);
-  const maxDrafted = Math.max(1, ...drf);
+  const prefillRing = rings.prefill || [];
+  const lastPrefill = [...prefillRing].reverse().find(v => v !== null) ?? null;
+  $('h-prefill').textContent = fmtNum(lastPrefill, 1, ' tok/s');
 
-  let html = '';
-  for (let i = 0; i < nD; i++) {
-    const d = drf[i] || 0, a = acc[i] || 0;
-    const rate = d > 0 ? a / d : 0;
-    const trackW = (d / maxDrafted * 100).toFixed(1);
-    const p = prob[i];
-    html += `
-      <div class="depth-row">
-        <div class="depth-head">
-          <span class="name">Depth ${i + 1}</span>
-          <span class="nums"><b>${fmtInt(a)}</b> of ${fmtInt(d)} accepted · <b>${fmt(rate * 100, 0)}%</b></span>
-        </div>
-        <div class="bar-track" style="width:${trackW}%">
-          <div class="bar-fill${rate >= 0.995 ? ' rounded' : ''}" style="width:${(rate * 100).toFixed(1)}%"></div>
-        </div>
-        <div class="prob-line">
-          <span>mean accept probability</span>
-          <span class="prob-meter"><i style="width:${p != null ? (p * 100).toFixed(1) : 0}%"></i></span>
-          <span class="pv">${p != null ? fmt(p * 100, 0) + '%' : '—'}</span>
-        </div>
-      </div>`;
-  }
-  box.innerHTML = html || '<div class="mini-note">no speculative data yet</div>';
+  $('h-completed').textContent = fmtNum(sv('requests_processed_total'), 0, '');
+  $('h-prompt-tok').textContent = fmtNum(sv('prompt_tokens_total'), 0, '');
+  $('h-completion-tok').textContent = fmtNum(sv('completion_tokens_total'), 0, '');
+
+  const active = sv('metal_active_memory_bytes');
+  $('hero-mem').textContent = active === null ? '—' : (active / 1e9).toFixed(2);
+  $('h-mem-peak').textContent = fmtGB(sv('metal_peak_memory_bytes'));
+  $('h-mem-cache').textContent = fmtGB(sv('metal_cache_memory_bytes'));
+  $('h-running').textContent = fmtNum(sv('requests_running'), 0, '');
+  $('h-waiting').textContent = fmtNum(sv('requests_waiting'), 0, '');
+  $('h-uptime').textContent = fmtDuration(sv('uptime_seconds'));
+  $('h-version').textContent = version || '—';
 }
 
 function renderThroughput(m) {
@@ -629,34 +622,6 @@ function renderContext(m) {
     `<i style="flex-grow:${Math.max(cached, 0.001)};background:var(--s1)" title="cached: ${fmtInt(cached)} tok"></i>` +
     `<i style="flex-grow:${Math.max(fresh, 0.001)};background:var(--s2)" title="fresh prefill: ${fmtInt(fresh)} tok"></i>`;
   strip.title = `prompt ${fmtInt(m.prompt_tokens)} tok = ${fmtInt(cached)} cached + ${fmtInt(fresh)} fresh`;
-}
-
-function renderVerify(m) {
-  /* categorical slots in fixed order: draft, verify fwd, verify eval, accept */
-  const parts = [
-    ['Draft (MTP heads)',   m.draft_time_s,          '--s1'],
-    ['Verify forward',      m.verify_forward_time_s, '--s2'],
-    ['Verify eval',         m.verify_eval_time_s,    '--s3'],
-    ['Accept / commit',     m.accept_time_s,         '--s4'],
-  ].filter(p => p[1] != null && p[1] > 0);
-  const total = parts.reduce((a, p) => a + p[1], 0);
-
-  const strip = $('v-strip');
-  const rows = $('v-rows');
-  if (!total) { strip.innerHTML = ''; rows.innerHTML = '<div class="mini-note">no timing data yet</div>'; return; }
-
-  strip.innerHTML = parts.map(([name, t, c]) =>
-    `<i style="flex-grow:${t};background:var(${c})" title="${name}: ${fmtSec(t)} (${fmt(t / total * 100, 1)}%)"></i>`
-  ).join('');
-  rows.innerHTML = parts.map(([name, t, c]) =>
-    `<div class="brow">
-       <span class="swatch" style="background:var(${c})"></span>
-       <span class="name">${name}</span>
-       <span class="val">${fmtSec(t)}</span>
-       <span class="pct">${fmt(t / total * 100, 1)}%</span>
-     </div>`
-  ).join('');
-  $('v-wall').textContent = fmtSec(m.decode_elapsed_s);
 }
 
 function renderCache(m) {
@@ -698,15 +663,19 @@ function renderToolParse(c) {
     }).join('');
 }
 
-function renderAll(data) {
-  const m = data.latest || {};
-  renderHero(m);
+function renderAll(p) {
+  /* Task 9 only rewires the hero — renderThroughput/renderLatency/renderContext/
+     renderCache/renderToolParse still expect the old per-request `latest` shape,
+     which no rapid-mlx payload carries (Task 10 repoints them at `series` via
+     sv()). Pass an empty object rather than `undefined` so they render their
+     existing null-safe placeholders instead of throwing. */
+  const m = p.latest || {};
+  renderHero();
   renderThroughput(m);
   renderLatency(m);
   renderContext(m);
-  renderVerify(m);
   renderCache(m);
-  renderToolParse(data.tool_parse_counters);
+  renderToolParse(p.toolParseCounters);
 }
 
 /* ================================================================= status */
@@ -817,10 +786,17 @@ $('range-sel').addEventListener('click', e => {
    that turns a payload into the same renderAll()/renderStatus() calls the
    old poll() used to make. */
 function applyPayload(p) {
-  connected = p.connected;
+  /* scrapeOk and upstreamOk are independent: a failed scrape says nothing
+     about whether inference is serving. Phase 1 has no proxy, so upstreamOk
+     is always null and only the scrape drives the banner. */
+  connected = p.scrapeOk;
   lastOkAt = p.lastOkAt;
   lastChangeAt = p.lastChangeAt;
   rings = p.rings;
+  series = p.series || {};
+  version = p.version;
+  contextWindow = p.contextWindow;
+
   if (p.model) $('model-chip').textContent = p.model;
   $('f-ring').textContent = String(p.ringSize);
 
@@ -831,8 +807,11 @@ function applyPayload(p) {
     document.body.classList.remove('disconnected');
   }
 
-  renderAll({ latest: p.latest || {}, tool_parse_counters: p.toolParseCounters });
+  renderAll(p);
   renderStatus();
+  /* Never call sparks.*.render() from here — renderSparks() is the only call
+     site, because it is what consults the range selector. A direct call would
+     let a tick silently overwrite a selected historical range with live data. */
   renderSparks();
 }
 

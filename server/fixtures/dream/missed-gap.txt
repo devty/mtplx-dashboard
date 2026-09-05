@@ -1,0 +1,204 @@
+[dream-nightly] Wed Sep  2 07:05:03 EDT 2026 starting
+[dream-nightly:patch] • 1/gateway toJsonSafeValue helper + json-safe tool-result: already present
+[dream-nightly:patch] • 2/subagent adapter parse double-encoded content_blocks: already present
+[dream-nightly:patch] 
+[dream-nightly:patch] applied=0 present=2 failed=0
+[dream-nightly] cycling sources: default calendar gstack gstack-code-xylophone-e88b2316 hermes limitless mail mem memorable social 
+[dream-nightly:export] [export-career-ops] transformed: 421 ok, 0 no-role, 0 no-h1, 2 skipped (metafiles)
+[dream-nightly:export] [export-career-ops] linked 293 evaluations to a company dossier; 69 companies have none
+[dream-nightly:export] [export-career-ops] unlinked companies listed in /Users/styledelk/mybrain/.career-ops-unlinked.txt
+[dream-nightly:export] [export-career-ops] mirrored into /Users/styledelk/mybrain/career-ops
+[dream-nightly:mtplx] no decode reading — skipping guard
+Skipped: another cycle is already running. (locked)
+[dream-nightly] stamped last_full_cycle_at for default
+Skipped: another cycle is already running. (locked)
+[dream-nightly:mtplx] no decode reading — skipping guard
+No stale pages — extraction is up to date.
+Dream cycle (partial) in 0.4s:
+  ✓ lint        0 fix(es) applied; 439 non-fixable (informational)
+  ✓ backlinks   no missing back-links found
+  ! sync        +0 added, ~0 modified, -0 deleted; 1 uncommitted file(s) invisible to commit-driven sync — commit them or set sync.include_working_tree=true
+  ✓ extract     0 link(s), 0 timeline entries (incremental: 0 slugs)
+  ✓ extract_facts  0 fact(s) reconciled across 0 page(s)
+  ✓ recompute_emotional_weight  recompute_emotional_weight (incremental, 0 slugs)
+[dream-nightly] stamped last_full_cycle_at for calendar
+Brain is healthy. 6 phase(s) checked in 735.8s.
+[dream-nightly:mtplx] no decode reading — skipping guard
+Text imported. Run 'gbrain embed --stale' to generate embeddings.
+Incremental extract: created 0 link(s), 0 timeline entries from 2/2 page(s)
+No stale pages — extraction is up to date.
+Dream cycle (ok) in 0.9s:
+  ✓ lint        0 fix(es) applied; 264 non-fixable (informational)
+  ✓ backlinks   no missing back-links found
+  ✓ sync        +2 added, ~0 modified, -0 deleted
+  ✓ extract     0 link(s), 0 timeline entries (incremental: 2 slugs)
+  ✓ extract_facts  0 fact(s) reconciled across 2 page(s)
+  ✓ recompute_emotional_weight  recompute_emotional_weight (2 pages)
+  totals: lint=0 backlinks=0 synced=2 extracted=0 embedded=0 orphans=0 synth_transcripts=0 synth_pages=0 patterns=0
+[dream-nightly] stamped last_full_cycle_at for gstack
+Brain is healthy. 6 phase(s) checked in 877.4s.
+[dream-nightly:mtplx] no decode reading — skipping guard
+No stale pages — extraction is up to date.
+Dream cycle (partial) in 1.7s:
+  ✓ lint        0 fix(es) applied; 37 non-fixable (informational)
+  ✓ backlinks   no missing back-links found
+  ! sync        +0 added, ~0 modified, -0 deleted; 1 uncommitted file(s) invisible to commit-driven sync — commit them or set sync.include_working_tree=true
+  ✓ extract     0 link(s), 0 timeline entries (incremental: 0 slugs)
+  ✓ extract_facts  0 fact(s) reconciled across 0 page(s)
+  ✓ recompute_emotional_weight  recompute_emotional_weight (incremental, 0 slugs)
+[dream-nightly] stamped last_full_cycle_at for gstack-code-xylophone-e88b2316
+Dream cycle (partial) in 1488.6s:
+  - extract_atoms  extract_atoms: no transcripts or pages to process
+  ✓ consolidate  promoted 2 facts into 1 takes across 596 buckets
+  ! propose_takes  propose_takes: scanned 94 pages, 0 cached, 151 new proposals, 0 orphans reaped, 49 empty (run propose-20260902113252-3fe22745) (1 warning(s))
+  ✓ conversation_facts_backfill  0 facts inserted across 10/10 sources, ~$0.0000 spent
+  - enrich_thin  cycle.enrich_thin.enabled=false (default OFF)
+  ✓ schema-suggest  3 suggestions emitted
+[dream-nightly:mtplx] no decode reading — skipping guard
+Extract --stale: 0 link(s) + 0 timeline entr(ies) from 4 page(s).
+Skipped 1 candidate(s) whose target page doesn't exist (references to non-pages are never persisted).
+Dream cycle (partial) in 0.4s:
+  ✓ lint        0 fix(es) applied; 220 non-fixable (informational)
+  ✓ backlinks   no missing back-links found
+  ! sync        +0 added, ~0 modified, -0 deleted; 1 uncommitted file(s) invisible to commit-driven sync — commit them or set sync.include_working_tree=true
+  ✓ extract     0 link(s), 0 timeline entries (incremental: 0 slugs)
+  ✓ extract_facts  0 fact(s) reconciled across 0 page(s)
+  ✓ recompute_emotional_weight  recompute_emotional_weight (incremental, 0 slugs)
+[dream-nightly] stamped last_full_cycle_at for hermes
+Dream cycle (partial) in 1476.7s:
+  - extract_atoms  extract_atoms: no transcripts or pages to process
+  ✓ consolidate  promoted 0 facts into 0 takes across 596 buckets
+  ! propose_takes  propose_takes: scanned 65 pages, 0 cached, 51 new proposals, 0 orphans reaped, 35 empty (run propose-20260902115744-2a3533e9) (1 warning(s))
+  ✓ conversation_facts_backfill  0 facts inserted across 10/10 sources, ~$0.0000 spent
+  - enrich_thin  cycle.enrich_thin.enabled=false (default OFF)
+  ✓ schema-suggest  3 suggestions emitted
+[dream-nightly:mtplx] no decode reading — skipping guard
+No stale pages — extraction is up to date.
+Brain is healthy. 6 phase(s) checked in 0.4s.
+[dream-nightly] stamped last_full_cycle_at for limitless
+Dream cycle (partial) in 1482.0s:
+  - extract_atoms  extract_atoms: no transcripts or pages to process
+  ✓ consolidate  promoted 0 facts into 0 takes across 596 buckets
+  ! propose_takes  propose_takes: scanned 98 pages, 0 cached, 145 new proposals, 0 orphans reaped, 32 empty (run propose-20260902122229-c1d2deb5) (1 warning(s))
+  ✓ conversation_facts_backfill  0 facts inserted across 10/10 sources, ~$0.0000 spent
+  - enrich_thin  cycle.enrich_thin.enabled=false (default OFF)
+  ✓ schema-suggest  4 suggestions emitted
+[dream-nightly:mtplx] no decode reading — skipping guard
+Text imported. Run 'gbrain embed --stale' to generate embeddings.
+Incremental extract: created 2 link(s), 0 timeline entries from 3/3 page(s)
+Extract --stale: 0 link(s) + 0 timeline entr(ies) from 4 page(s).
+Dream cycle (partial) in 1.3s:
+  ✓ lint        2 fix(es) applied; 335 non-fixable (informational)
+  ✓ backlinks   40 missing back-link(s) found (audit-only; run gbrain check-backlinks fix to materialize)
+  ! sync        +2 added, ~8 modified, -0 deleted; 58 uncommitted file(s) invisible to commit-driven sync — commit them or set sync.include_working_tree=true
+  ✓ extract     2 link(s), 0 timeline entries (incremental: 3 slugs)
+  ✓ extract_facts  1 fact(s) reconciled across 3 page(s)
+  ✓ recompute_emotional_weight  recompute_emotional_weight (5 pages)
+  totals: lint=2 backlinks=0 synced=10 extracted=2 embedded=0 orphans=0 synth_transcripts=0 synth_pages=0 patterns=0
+[dream-nightly] stamped last_full_cycle_at for mail
+Brain is healthy. 6 phase(s) checked in 1222.6s.
+[dream-nightly:mtplx] no decode reading — skipping guard
+Extract --stale: 0 link(s) + 0 timeline entr(ies) from 2 page(s).
+Brain is healthy. 6 phase(s) checked in 0.5s.
+[dream-nightly] stamped last_full_cycle_at for mem
+Brain is healthy. 6 phase(s) checked in 1077.5s.
+[dream-nightly:mtplx] no decode reading — skipping guard
+Text imported. Run 'gbrain embed --stale' to generate embeddings.
+No stale pages — extraction is up to date.
+Dream cycle (ok) in 0.5s:
+  ✓ lint        0 fix(es) applied; 1 non-fixable (informational)
+  ✓ backlinks   no missing back-links found
+  ✓ sync        +2 added, ~0 modified, -0 deleted
+  ✓ extract     0 link(s), 0 timeline entries (incremental: 0 slugs)
+  ✓ extract_facts  0 fact(s) reconciled across 0 page(s)
+  ✓ recompute_emotional_weight  recompute_emotional_weight (incremental, 0 slugs)
+  totals: lint=0 backlinks=0 synced=2 extracted=0 embedded=0 orphans=0 synth_transcripts=0 synth_pages=0 patterns=0
+[dream-nightly] stamped last_full_cycle_at for memorable
+Brain is healthy. 6 phase(s) checked in 38.7s.
+[dream-nightly:mtplx] no decode reading — skipping guard
+No stale pages — extraction is up to date.
+Brain is healthy. 6 phase(s) checked in 1.0s.
+[dream-nightly] stamped last_full_cycle_at for social
+[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting
+[dream-nightly:patch] • 1/gateway toJsonSafeValue helper + json-safe tool-result: already present
+[dream-nightly:patch] • 2/subagent adapter parse double-encoded content_blocks: already present
+[dream-nightly:patch] 
+[dream-nightly:patch] applied=0 present=2 failed=0
+[dream-nightly] cycling sources: default calendar gstack gstack-code-xylophone-e88b2316 hermes limitless mail mem memorable social 
+[dream-nightly:export] [export-career-ops] split applications tracker: ok 122 page(s) by company
+[dream-nightly:export] [export-career-ops] transformed: 470 ok, 0 no-role, 0 no-h1, 4 skipped (metafiles)
+[dream-nightly:export] [export-career-ops] linked 330 evaluations to a company dossier; 83 companies have none
+[dream-nightly:export] [export-career-ops] unlinked companies listed in /Users/styledelk/mybrain/.career-ops-unlinked.txt
+[dream-nightly:export] [export-career-ops] mirrored into /Users/styledelk/mybrain/career-ops
+No stale pages — extraction is up to date.
+Dream cycle (partial) in 1.4s:
+  ✓ lint        0 fix(es) applied; 1735 non-fixable (informational)
+  ✓ backlinks   578 missing back-link(s) found (audit-only; run gbrain check-backlinks fix to materialize)
+  ✓ sync        +0 added, ~0 modified, -0 deleted
+  ✓ extract     0 link(s), 0 timeline entries (incremental: 0 slugs)
+  ! extract_facts  extract_facts skipped: 4 legacy v0.31 facts pending fence backfill
+  ✓ recompute_emotional_weight  recompute_emotional_weight (incremental, 0 slugs)
+[dream-nightly] stamped last_full_cycle_at for default
+Dream cycle (partial) in 812.4s:
+  ! extract_atoms  extract_atoms: 124 atoms from 2/27 transcripts + 49/50 pages (1 failed)
+      ✗ career-ops/by-company/n8n: malformed model output: unparseable JSON array (consecutive failure 1 on this content)
+  ✓ consolidate  promoted 2 facts into 1 takes across 596 buckets
+  ✓ propose_takes  propose_takes: scanned 100 pages, 0 cached, 101 new proposals, 0 orphans reaped, 41 empty (run propose-20260905111530-ab69745f)
+  ✓ conversation_facts_backfill  0 facts inserted across 10/10 sources, ~$0.0000 spent
+  - enrich_thin  cycle.enrich_thin.enabled=false (default OFF)
+  ✓ schema-suggest  16 suggestions emitted
+No stale pages — extraction is up to date.
+Brain is healthy. 6 phase(s) checked in 0.5s.
+[dream-nightly] stamped last_full_cycle_at for calendar
+Brain is healthy. 6 phase(s) checked in 34.1s.
+No stale pages — extraction is up to date.
+Brain is healthy. 6 phase(s) checked in 0.5s.
+[dream-nightly] stamped last_full_cycle_at for gstack
+Brain is healthy. 6 phase(s) checked in 30.0s.
+No stale pages — extraction is up to date.
+Brain is healthy. 6 phase(s) checked in 1.8s.
+[dream-nightly] stamped last_full_cycle_at for gstack-code-xylophone-e88b2316
+Brain is healthy. 6 phase(s) checked in 31.2s.
+No stale pages — extraction is up to date.
+Brain is healthy. 6 phase(s) checked in 0.3s.
+[dream-nightly] stamped last_full_cycle_at for hermes
+Brain is healthy. 6 phase(s) checked in 31.4s.
+No stale pages — extraction is up to date.
+Brain is healthy. 6 phase(s) checked in 0.4s.
+[dream-nightly] stamped last_full_cycle_at for limitless
+Brain is healthy. 6 phase(s) checked in 30.5s.
+No stale pages — extraction is up to date.
+Dream cycle (partial) in 0.5s:
+  ✓ lint        0 fix(es) applied; 335 non-fixable (informational)
+  ✓ backlinks   40 missing back-link(s) found (audit-only; run gbrain check-backlinks fix to materialize)
+  ✓ sync        +0 added, ~0 modified, -0 deleted
+  ✓ extract     0 link(s), 0 timeline entries (incremental: 0 slugs)
+  ! extract_facts  extract_facts skipped: 5 legacy v0.31 facts pending fence backfill
+  ✓ recompute_emotional_weight  recompute_emotional_weight (incremental, 0 slugs)
+[dream-nightly] stamped last_full_cycle_at for mail
+Brain is healthy. 6 phase(s) checked in 70.4s.
+No stale pages — extraction is up to date.
+Brain is healthy. 6 phase(s) checked in 0.5s.
+[dream-nightly] stamped last_full_cycle_at for mem
+Brain is healthy. 6 phase(s) checked in 45.7s.
+No stale pages — extraction is up to date.
+Dream cycle (partial) in 0.4s:
+  ✓ lint        0 fix(es) applied; 18 non-fixable (informational)
+  ✓ backlinks   no missing back-links found
+  ! sync        +0 added, ~0 modified, -0 deleted; 1 uncommitted file(s) invisible to commit-driven sync — commit them or set sync.include_working_tree=true
+  ✓ extract     0 link(s), 0 timeline entries (incremental: 0 slugs)
+  ✓ extract_facts  0 fact(s) reconciled across 0 page(s)
+  ✓ recompute_emotional_weight  recompute_emotional_weight (incremental, 0 slugs)
+[dream-nightly] stamped last_full_cycle_at for memorable
+Brain is healthy. 6 phase(s) checked in 42.9s.
+No stale pages — extraction is up to date.
+Brain is healthy. 6 phase(s) checked in 0.9s.
+[dream-nightly] stamped last_full_cycle_at for social
+Brain is healthy. 6 phase(s) checked in 31.3s.
+[dream-nightly] global pass brain dir: /Users/styledelk/mybrain
+[dream-nightly] global pass (brain-wide phases, once)
+[dream-nightly] WARN: global pass failed (rc=143)
+[dream-nightly:commit] default committed e7fd46f
+[dream-nightly:commit] default re-synced (freshness advanced)
+[dream-nightly:commit] default pushed to origin
+[dream-nightly:commit] memorable committed 2bb4845

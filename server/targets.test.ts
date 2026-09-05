@@ -34,8 +34,49 @@ test('strips a trailing slash from the upstream URL', () => {
   assert.equal(t[0].upstreamUrl, 'http://127.0.0.1:8000');
 });
 
-test('falls back to the default when every entry is malformed', () => {
-  const t = parseTargets({ RAPID_MLX_TARGETS: 'garbage,,=,x=' });
+/** Captures console.warn for the duration of fn. */
+function captureWarnings(fn: () => void): string[] {
+  const lines: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => { lines.push(args.join(' ')); };
+  try { fn(); } finally { console.warn = original; }
+  return lines;
+}
+
+test('falls back to the default when every entry is malformed, and says so', () => {
+  let t: ReturnType<typeof parseTargets> = [];
+  const warnings = captureWarnings(() => { t = parseTargets({ RAPID_MLX_TARGETS: 'garbage,,=,x=' }); });
   assert.equal(t.length, 1);
   assert.equal(t[0].id, 'qwen');
+  assert.ok(warnings.some(w => w.includes('falling back')), 'fallback was silent');
+});
+
+/* A typo in one entry of a multi-target list must not quietly start the
+   dashboard against half the fleet looking perfectly healthy. */
+test('a malformed entry is dropped loudly, and its valid siblings survive', () => {
+  let t: ReturnType<typeof parseTargets> = [];
+  const warnings = captureWarnings(() => {
+    t = parseTargets({ RAPID_MLX_TARGETS: 'good=http://127.0.0.1:8000:8010,badnoequals' });
+  });
+  assert.equal(t.length, 1);
+  assert.equal(t[0].id, 'good');
+  assert.ok(warnings.some(w => w.includes('badnoequals')), 'skipped entry was not reported');
+});
+
+/* Port 0 is falsy, so a later `if (target.proxyPort)` would read an explicit
+   :0 as "no proxy configured" — a config error wearing a default's clothes. */
+test('an out-of-range proxy port is rejected rather than carried', () => {
+  for (const bad of ['0', '99999']) {
+    let t: ReturnType<typeof parseTargets> = [];
+    const warnings = captureWarnings(() => {
+      t = parseTargets({ RAPID_MLX_TARGETS: `a=http://127.0.0.1:8000:${bad},b=http://127.0.0.1:8087:8011` });
+    });
+    assert.deepEqual(t.map(x => x.id), ['b'], `proxy port ${bad} was accepted`);
+    assert.ok(warnings.some(w => w.includes(bad)), `proxy port ${bad} was dropped silently`);
+  }
+});
+
+test('valid boundary proxy ports are accepted', () => {
+  const t = parseTargets({ RAPID_MLX_TARGETS: 'a=http://127.0.0.1:8000:1,b=http://127.0.0.1:8087:65535' });
+  assert.deepEqual(t.map(x => x.proxyPort), [1, 65535]);
 });

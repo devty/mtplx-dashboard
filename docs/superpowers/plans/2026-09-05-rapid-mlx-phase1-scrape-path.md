@@ -170,10 +170,17 @@ test('findSample matches on a label subset', () => {
   assert.equal(findSample(s, 'rapid_mlx_kv_cache_dtype', { dtype: 'nope' }), null);
 });
 
-test('parses the +Inf histogram bucket', () => {
+test('parses cumulative histogram buckets including +Inf', () => {
   const s = parsePrometheus(fixture(AFTER));
-  const inf = findSample(s, 'rapid_mlx_model_ttft_seconds_bucket', { le: '+Inf' });
-  assert.equal(inf?.value, 0);
+  const at = (le: string) =>
+    findSample(s, 'rapid_mlx_model_ttft_seconds_bucket', { le })?.value ?? null;
+  /* Buckets are cumulative. The one completed request took 0.393659s, so every
+     bucket below it is 0 and every bucket from le=0.5 up carries the 1, with
+     +Inf always holding the full count. */
+  assert.equal(at('0.25'), 0);
+  assert.equal(at('0.5'), 1);
+  assert.equal(at('+Inf'), 1);
+  assert.equal(findSample(s, 'rapid_mlx_model_ttft_seconds_count')?.value, 1);
 });
 ```
 
@@ -301,7 +308,7 @@ export function findSample(
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `node --disable-warning=ExperimentalWarning --import tsx --test server/promParse.test.ts`
-Expected: PASS, 14 tests.
+Expected: PASS, 13 tests.
 
 If the three family-count assertions fail, do **not** adjust the expected numbers — re-read `server/fixtures/README.md`. Those counts are the contract that proves the family set is dynamic.
 
@@ -2497,7 +2504,7 @@ git commit -m "chore: retire MTPLX artifacts, document the rapid-mlx architectur
 
 ## Done when
 
-- `npm test` passes: `promParse` (14), `promSeries` (13), `runTracker` (10), `targets` (5), `promScraper` (5), `db` (existing plus 8 new).
+- `npm test` passes: `promParse` (13), `promSeries` (13), `runTracker` (10), `targets` (5), `promScraper` (5), `db` (existing plus 8 new).
 - `npm run typecheck` and `npm run build` are clean.
 - The dashboard shows live throughput, memory, queue, prefix-cache and outcome data against the real `:8000` server.
 - Exactly one `run` row exists after several minutes of uptime.

@@ -703,7 +703,14 @@ function renderContext() {
      here instead of via a server-side ring. */
   const total = sv('model_prompt_tokens_total');
   if (total !== null) {
-    if (lastPromptTotal !== null && total > lastPromptTotal) {
+    if (lastPromptTotal !== null && total < lastPromptTotal) {
+      /* Counter went backwards: rapid-mlx restarted and rebased. The held delta
+         belongs to a process that no longer exists, and this state survives an SSE
+         reconnect — only a page reload clears it — so drop it rather than show a
+         dead process's request as current. Mirrors CounterState.delta()'s
+         null-on-reset in server/promSeries.ts. */
+      lastReqPromptTok = null;
+    } else if (lastPromptTotal !== null && total > lastPromptTotal) {
       lastReqPromptTok = total - lastPromptTotal;
     }
     lastPromptTotal = total;
@@ -741,8 +748,9 @@ function renderStructuredOutput() {
   const total = sv('response_format_strict_total');
   const violations = sv('response_format_strict_violations_total');
   const clean = total === null || violations === null ? null : total - violations;
-  $('so-rate').textContent = total ? fmtNum((clean / total) * 100, 1, '%') : '—';
-  $('so-strip').innerHTML = total
+  const showRate = total && clean !== null;
+  $('so-rate').textContent = showRate ? fmtNum((clean / total) * 100, 1, '%') : '—';
+  $('so-strip').innerHTML = showRate
     ? `<i style="flex-grow:${Math.max(clean, 0.001)};background:var(--good)" title="clean: ${fmtInt(clean)}"></i>` +
       (violations > 0 ? `<i style="flex-grow:${violations};background:var(--critical)" title="violations: ${fmtInt(violations)}"></i>` : '')
     : '';

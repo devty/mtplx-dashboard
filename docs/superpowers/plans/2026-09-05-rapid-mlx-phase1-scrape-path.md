@@ -1977,7 +1977,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parsePrometheus } from './promParse';
 import { CounterState } from './promSeries';
-import { deriveSamples } from './promScraper';
+import { deriveSamples, isCumulative } from './promScraper';
 
 const read = (n: string) =>
   fs.readFileSync(path.join(__dirname, 'fixtures', n), 'utf8');
@@ -2033,6 +2033,36 @@ test('ttft is the mean over the interval when several requests complete', () => 
   assert.equal(d.ttft, 0.5); // 2.0s over 4 requests
 });
 
+/* The declared type must beat the name. rapid-mlx already ships gauges whose
+   names end in a counter-ish suffix, so a name-first rule silently differences
+   them into nonsense. */
+test('isCumulative trusts the declared type over the name', () => {
+  const s = parsePrometheus(
+    '# TYPE a_total counter\na_total 1\n' +
+    '# TYPE b_seconds histogram\nb_seconds_bucket{le="1"} 1\nb_seconds_sum 0.5\nb_seconds_count 1\n' +
+    '# TYPE b_seconds_max gauge\nb_seconds_max 0.5\n' +
+    '# TYPE c_count gauge\nc_count 7\n' +
+    '# TYPE d gauge\nd 3\n'
+  );
+  assert.equal(isCumulative(s, 'a_total'), true, 'declared counter');
+  assert.equal(isCumulative(s, 'b_seconds_bucket'), true, 'histogram component');
+  assert.equal(isCumulative(s, 'b_seconds_sum'), true, 'histogram component');
+  assert.equal(isCumulative(s, 'b_seconds_count'), true, 'histogram component');
+  assert.equal(isCumulative(s, 'b_seconds_max'), false, 'declared gauge on a histogram family');
+  assert.equal(isCumulative(s, 'c_count'), false, 'gauge whose NAME ends in _count');
+  assert.equal(isCumulative(s, 'd'), false, 'plain gauge');
+});
+
+test('isCumulative classifies the real fixture families correctly', () => {
+  const s = parsePrometheus(AFTER);
+  assert.equal(isCumulative(s, 'rapid_mlx_requests_processed_total'), true);
+  assert.equal(isCumulative(s, 'rapid_mlx_model_ttft_seconds_bucket'), true);
+  assert.equal(isCumulative(s, 'rapid_mlx_model_ttft_seconds_count'), true);
+  assert.equal(isCumulative(s, 'rapid_mlx_model_decode_tokens_per_second_last'), false);
+  assert.equal(isCumulative(s, 'rapid_mlx_model_ttft_seconds_max'), false);
+  assert.equal(isCumulative(s, 'rapid_mlx_uptime_seconds'), false);
+});
+
 test('a counter reset yields nulls rather than a spike', () => {
   const c = new CounterState();
   deriveSamples(parsePrometheus(COLD), c);
@@ -2065,6 +2095,12 @@ import type { Store } from './db';
 import type { Target } from './targets';
 import type { RingBuffers, StatePayload } from './types';
 
+/* These start EMPTY on every dashboard restart, and that is structural, not a
+   gap to be fixed. MTPLX shipped a `recent[]` rolling window that the old
+   poller seeded from, so a fresh tab got deep history instantly. A Prometheus
+   scrape exposes only current values — there is no past to seed from. Depth
+   rebuilds as requests complete. Do not "restore" this by synthesising points
+   from counters; a fabricated history is worse than a short one. */
 const rings: RingBuffers = { decode: [], prefill: [], ttft: [], accept: [] };
 const counters = new CounterState();
 /** Last persisted value per series, so unchanged series are not rewritten. */
@@ -2118,11 +2154,23 @@ export function deriveSamples(
   };
 }
 
-/** True for families whose stored value must be a per-interval delta. */
-function isCumulative(s: PromScrape, name: string): boolean {
-  if (name.endsWith('_bucket') || name.endsWith('_sum') || name.endsWith('_count')) return true;
+/** True for families whose stored value must be a per-interval delta.
+ *
+ *  The DECLARED type decides whenever there is one — never the name. Suffix
+ *  sniffing looks equivalent and is not: rapid-mlx already ships gauges whose
+ *  names end in a counter-ish suffix (`..._seconds_max`, `..._per_second_last`),
+ *  and a future gauge named `..._count` would be silently differenced into
+ *  nonsense by a name-first rule.
+ *
+ *  Only a name with NO type line of its own falls through, which in this format
+ *  means a histogram component (`_bucket`/`_sum`/`_count` carry no TYPE line —
+ *  their parent family does). Those are cumulative exactly when that parent is
+ *  a histogram. */
+export function isCumulative(s: PromScrape, name: string): boolean {
+  const declared = s.families.get(name)?.type;
+  if (declared) return declared === 'counter';
   const base = name.replace(/_(bucket|sum|count)$/, '');
-  return s.families.get(name)?.type === 'counter' || s.families.get(base)?.type === 'histogram';
+  return s.families.get(base)?.type === 'histogram';
 }
 
 function persistGauges(s: PromScrape, now: number): void {
@@ -2761,7 +2809,7 @@ git commit -m "chore: retire MTPLX artifacts, document the rapid-mlx architectur
 
 ## Done when
 
-- `npm test` passes: `promParse` (13), `promSeries` (15), `runTracker` (12), `targets` (8), `promScraper` (5), `db` (existing plus 8 new).
+- `npm test` passes: `promParse` (13), `promSeries` (15), `runTracker` (12), `targets` (8), `promScraper` (7), `db` (existing plus 8 new).
 - `npm run typecheck` and `npm run build` are clean.
 - The dashboard shows live throughput, memory, queue, prefix-cache and outcome data against the real `:8000` server.
 - Exactly one `run` row exists after several minutes of uptime.

@@ -116,67 +116,23 @@ else
 fi
 
 # --- 3. completion-site coverage ---------------------------------------------
-# Upstream adds a completion site per scheduler; 2.6.0 added
-# _finalize_mtp_batch_generation and the then-current patch silently stopped
-# capturing on that path.
-#
-# Comparing TOTALS of the two helper names is not sufficient. `patch` anchors by
-# surrounding context, and the scheduler finalizers share near-identical context
-# (same warmup comment block, same last_request_at/requests_completed pair, same
-# record line). On 2.10.2 that made it apply the mtp_batch hunk onto the ar_batch
-# site: two captures at one site, zero at another, totals still equal, check
-# green, capture silently dead on that lane. Resolve coverage PER SITE, keyed on
-# the enclosing function.
+# Upstream adds a completion site per scheduler; 2.6.0 added _finalize_mtp_batch_generation
+# and the then-current patch silently stopped capturing on that path.
 if [ "$MARKERS" -gt 0 ]; then
-  COVERAGE="$(python3 - "$TARGET" <<'PYEOF'
-import re, sys
-lines = open(sys.argv[1], encoding="utf-8", errors="replace").read().split("\n")
-func, sites, caps = None, [], {}
-for i, l in enumerate(lines, 1):
-    m = re.match(r'\s*(?:async\s+)?def\s+(\w+)', l)
-    if m:
-        func = m.group(1)
-        continue
-    if '_dashboard_record_completion(' in l:
-        sites.append((func, i))
-    if '_dashboard_capture_response_text(' in l:
-        caps[func] = caps.get(func, 0) + 1
-print("TOTAL=%d" % len(sites))
-print("COVERED=%d" % sum(1 for f, _ in sites if caps.get(f, 0) > 0))
-for f, ln in sites:
-    if caps.get(f, 0) == 0:
-        print("MISSING=%s:%s" % (f, ln))
-for f, n in sorted(caps.items()):
-    if n > 1:
-        print("DUPLICATE=%s:%d" % (f, n))
-PYEOF
-)"
-  CT="$(printf '%s\n' "$COVERAGE" | sed -n 's/^TOTAL=//p')";   CT="${CT:-0}"
-  CC="$(printf '%s\n' "$COVERAGE" | sed -n 's/^COVERED=//p')"; CC="${CC:-0}"
-  MISS="$(printf '%s\n' "$COVERAGE" | sed -n 's/^MISSING=//p')"
-  DUPE="$(printf '%s\n' "$COVERAGE" | sed -n 's/^DUPLICATE=//p')"
-
-  if [ -n "$MISS" ]; then
-    DRIFT=1
-    warn "COVERAGE GAP: $CC/$CT completion sites captured"
-    printf '%s\n' "$MISS" | while IFS=: read -r fn ln; do
-      [ -n "$fn" ] && info "  uncovered: $fn (record call at line $ln)"
-    done
-    info "add _dashboard_capture_response_text(state, generated.get(\"text\")) after that line,"
-    info "then regenerate patches/mtplx-full-transcript-capture.patch"
-  elif [ -n "$DUPE" ]; then
-    DRIFT=1
-    warn "DUPLICATE CAPTURE: a hunk applied more than once at the same site"
-    printf '%s\n' "$DUPE" | while IFS=: read -r fn n; do
-      [ -n "$fn" ] && info "  $fn has $n capture calls (expected 1)"
-    done
-    info "harmless at runtime (the helper assigns, it does not append) but it means"
-    info "the patch mis-anchored — check every other site before trusting this apply"
+  SITES="$(grep -c '_dashboard_record_completion(state, envelope=envelope, stats=stats)' "$TARGET" 2>/dev/null || true)"
+  CAPS="$(grep -c '_dashboard_capture_response_text(state,' "$TARGET" 2>/dev/null || true)"
+  SITES="${SITES:-0}"; CAPS="${CAPS:-0}"
+  if [ "$SITES" -eq "$CAPS" ]; then
+    ok "all $SITES completion sites covered"
   else
-    ok "all $CT completion sites covered (verified per-site, by enclosing function)"
+    DRIFT=1
+    warn "COVERAGE GAP: $SITES completion sites but only $CAPS capture calls"
+    info "upstream added a path this patch doesn't cover. Find it with:"
+    info "  grep -n '_dashboard_record_completion(state, envelope=envelope, stats=stats)' '$TARGET'"
+    info "add _dashboard_capture_response_text(state, generated.get(\"text\")) after it,"
+    info "then regenerate patches/mtplx-full-transcript-capture.patch"
   fi
 fi
-
 
 # --- 4. is capture actually switched on? -------------------------------------
 PID="$(pgrep -f 'mtplx.server.openai' 2>/dev/null | head -1)"

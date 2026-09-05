@@ -1,14 +1,7 @@
-# mtplx full-transcript capture for the mtplx-dashboard
-# Regenerated against mtplx 2.10.2 (was pinned at 2.6.0 context).
-# Apply from the venv's site-packages:
-#   cd "$VENV/lib/python3.14/site-packages" && patch -p1 --forward < this.patch
-# Covers all THREE completion sites: _finalize_batched_ar_generation,
-# _finalize_mtp_batch_generation, and record_tokens. Verify coverage per-site
-# (by enclosing function) after applying - the finalizers share near-identical
-# context and patch will happily anchor two hunks onto the same one.
---- a/mtplx/server/openai.py	2026-09-01 06:21:46
-+++ b/mtplx/server/openai.py	2026-09-01 06:21:46
-@@ -18466,8 +18466,56 @@
+diff --git a/mtplx/server/openai.py b/mtplx/server/openai.py
+--- a/mtplx/server/openai.py
++++ b/mtplx/server/openai.py
+@@ -16331,8 +16331,56 @@
          )
      except BaseException:
          pass
@@ -65,7 +58,7 @@
  def _request_observability(
      request: ChatCompletionRequest,
      *,
-@@ -18533,7 +18581,23 @@
+@@ -16398,7 +16446,23 @@
          "request_depth": int(request_depth),
          "request_last_user_preview": user_texts[-1][:180] if user_texts else None,
          "request_last_user_chars": len(user_texts[-1]) if user_texts else 0,
@@ -89,25 +82,25 @@
              {"anthropic_max_tokens_defaulted": True}
              if getattr(request, "anthropic_max_tokens_defaulted", False)
              else {}
-@@ -20849,6 +20913,7 @@
-         state.last_request_at = time.time()
-         state.requests_completed += 1
+@@ -18535,6 +18599,7 @@
+     state.last_request_at = time.time()
+     state.requests_completed += 1
      _dashboard_record_completion(state, envelope=envelope, stats=stats)
 +    _dashboard_capture_response_text(state, generated.get("text"))
      generated["stats"] = _json_safe(stats)
      generated["completion_tokens"] = completion_tokens
      generated["tok_s"] = stats.get("decode_tok_s") or generated.get("tok_s") or 0.0
-@@ -21050,6 +21115,7 @@
-         state.last_request_at = time.time()
-         state.requests_completed += 1
+@@ -18727,6 +18792,7 @@
+     state.last_request_at = time.time()
+     state.requests_completed += 1
      _dashboard_record_completion(state, envelope=envelope, stats=stats)
 +    _dashboard_capture_response_text(state, generated.get("text"))
      generated["stats"] = _json_safe(stats)
      generated["completion_tokens"] = completion_tokens
      generated["tok_s"] = stats.get("decode_tok_s") or generated.get("tok_s") or 0.0
-@@ -22889,6 +22955,7 @@
-             state.last_request_at = time.time()
-             state.requests_completed += 1
+@@ -20465,6 +20531,7 @@
+         state.last_request_at = time.time()
+         state.requests_completed += 1
          _dashboard_record_completion(state, envelope=envelope, stats=stats)
 +        _dashboard_capture_response_text(state, getattr(out, "text", None))
          last = {

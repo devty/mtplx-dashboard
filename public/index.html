@@ -337,47 +337,117 @@ footer code { font: 11px ui-monospace, Menlo, monospace; }
 
     <section class="card">
       <h2>Time to first token</h2>
+      <div class="subtitle">Interval mean (Δsum / Δcount) — rapid-mlx exposes no per-request TTFT gauge</div>
       <div class="big"><span id="l-ttft">—</span><span class="unit">s</span></div>
       <div class="spark" id="spark-ttft"></div>
-      <div class="kv" style="margin-top:8px"><span class="k">Decode elapsed</span><span class="v" id="l-decode">—</span></div>
-      <div class="kv"><span class="k">Request total</span><span class="v" id="l-total">—</span></div>
     </section>
 
     <section class="card">
       <h2>Context window</h2>
-      <div class="big"><span id="c-used">—</span><span class="unit">/ 262K tok</span></div>
-      <div class="meter"><i id="c-meter"></i></div>
-      <div class="meter-cap"><span id="c-pct">—</span><span>262,144 max</span></div>
-      <div class="strip" id="c-strip" title=""></div>
-      <div class="legend" style="margin-top:8px">
-        <span class="key"><span class="swatch" style="background:var(--s1)"></span>cached <b id="c-cached" style="font-weight:600;color:var(--ink)">—</b></span>
-        <span class="key"><span class="swatch" style="background:var(--s2)"></span>fresh prefill <b id="c-fresh" style="font-weight:600;color:var(--ink)">—</b></span>
-      </div>
+      <div class="subtitle">Prompt-token occupancy of the last completed request — not KV occupancy; rapid-mlx has no per-request <code>context_len</code></div>
+      <div class="big"><span id="ctx-used">—</span><span class="unit">/ <span id="ctx-max">—</span> tok</span></div>
+      <div class="meter"><i id="ctx-meter"></i></div>
+      <div class="meter-cap"><span id="ctx-pct">—</span><span id="ctx-max-cap">—</span></div>
     </section>
 
     <!-- ===================================================== ROW 3 -->
     <section class="card">
       <h2>KV cache</h2>
-      <div style="margin:10px 0 4px; display:flex; gap:8px; align-items:center;">
-        <span class="badge blue" id="k-source">—</span>
-        <span class="badge" id="k-hit">—</span>
-      </div>
+      <div class="subtitle">Prefix cache, cumulative since server start</div>
+      <div class="big" style="font-size:24px"><span id="c-hitrate">—</span><span class="unit">hit rate</span></div>
       <div class="rows">
-        <div class="kv"><span class="k">Cached tokens</span><span class="v" id="k-tokens">—</span></div>
-        <div class="kv"><span class="k">Restore time</span><span class="v" id="k-restore">—</span></div>
-        <div class="kv"><span class="k">SSD cache hit</span><span class="v" id="k-ssd">—</span></div>
-        <div class="kv"><span class="k">SSD cached tokens</span><span class="v" id="k-ssdtok">—</span></div>
+        <div class="kv"><span class="k">Hits</span><span class="v" id="c-hits">—</span></div>
+        <div class="kv"><span class="k">Misses</span><span class="v" id="c-misses">—</span></div>
+        <div class="kv"><span class="k">Tokens saved</span><span class="v" id="c-saved">—</span></div>
+        <div class="kv"><span class="k">Cache size</span><span class="v" id="c-bytes">—</span></div>
+        <div class="kv"><span class="k">Cache cap</span><span class="v" id="c-cap">—</span></div>
+        <div class="kv"><span class="k">Pressure evictions</span><span class="v" id="c-evictions">—</span></div>
       </div>
-
     </section>
 
     <section class="card">
-      <h2>Tool-call parsing</h2>
+      <h2>Structured output</h2>
+      <div class="subtitle">response_format strict-mode health — per-request tool-call counts arrive with the Phase 2 capture proxy</div>
       <div style="display:flex; align-items:baseline; gap:10px; margin-top:6px;">
-        <div class="big" style="font-size:24px"><span id="p-rate">—</span><span class="unit">clean</span></div>
+        <div class="big" style="font-size:24px"><span id="so-rate">—</span><span class="unit">clean</span></div>
       </div>
-      <div class="strip" id="p-strip" style="height:10px"></div>
-      <div class="rows" id="p-rows" style="margin-top:8px"></div>
+      <div class="strip" id="so-strip" style="height:10px"></div>
+      <div class="rows">
+        <div class="kv"><span class="k">Strict requests</span><span class="v" id="so-total">—</span></div>
+        <div class="kv"><span class="k">Violations</span><span class="v" id="so-violations">—</span></div>
+        <div class="kv"><span class="k">Repairs attempted</span><span class="v" id="so-repairs-att">—</span></div>
+        <div class="kv"><span class="k">Repairs succeeded</span><span class="v" id="so-repairs-ok">—</span></div>
+        <div class="kv"><span class="k">Repairs skipped (overflow)</span><span class="v" id="so-repairs-skip">—</span></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Queue</h2>
+      <div class="subtitle">Scheduler admission state for the live target</div>
+      <div class="big"><span id="q-running">—</span><span class="unit">running</span></div>
+      <div class="rows">
+        <div class="kv"><span class="k">Waiting</span><span class="v" id="q-waiting">—</span></div>
+        <div class="kv"><span class="k">Steps executed</span><span class="v" id="q-steps">—</span></div>
+        <div class="kv"><span class="k">Cancelled</span><span class="v" id="q-cancelled">—</span></div>
+        <div class="kv"><span class="k">Cancelled via disconnect</span><span class="v" id="q-cancelled-disc">—</span></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Request outcomes</h2>
+      <div class="subtitle">Cumulative since server start; repetition-loop counters flag generation-quality issues</div>
+      <div class="strip" id="o-strip" style="height:10px"></div>
+      <div class="rows">
+        <div class="kv"><span class="k">Succeeded</span><span class="v" id="o-succeeded">—</span></div>
+        <div class="kv"><span class="k">Cancelled</span><span class="v" id="o-cancelled">—</span></div>
+        <div class="kv"><span class="k">Failed</span><span class="v" id="o-failed">—</span></div>
+        <div class="kv"><span class="k">Repetition-loop stops</span><span class="v" id="o-rep-stops">—</span></div>
+        <div class="kv"><span class="k">Repetition-loop breaks</span><span class="v" id="o-rep-breaks">—</span></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== ROW 4 -->
+    <section class="card">
+      <h2>Memory detail</h2>
+      <div class="subtitle">Metal unified-memory pressure and unified-buffer-cache eviction</div>
+      <div class="rows">
+        <div class="kv"><span class="k">Active</span><span class="v" id="m-active">—</span></div>
+        <div class="kv"><span class="k">Peak</span><span class="v" id="m-peak">—</span></div>
+        <div class="kv"><span class="k">Cache</span><span class="v" id="m-cache">—</span></div>
+        <div class="kv"><span class="k">Cap violations</span><span class="v" id="m-cap-violations">—</span></div>
+        <div class="kv"><span class="k">UBC evicted (safetensors)</span><span class="v" id="m-ubc-evicted">—</span></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>KV checkpoints</h2>
+      <div class="subtitle">Disk-backed session-bank checkpoint I/O, separate from the prefix cache above</div>
+      <div class="rows">
+        <div class="kv"><span class="k">Writes</span><span class="v" id="kc-writes">—</span></div>
+        <div class="kv"><span class="k">Loads</span><span class="v" id="kc-loads">—</span></div>
+        <div class="kv"><span class="k">Bytes</span><span class="v" id="kc-bytes">—</span></div>
+        <div class="kv"><span class="k">Evictions</span><span class="v" id="kc-evictions">—</span></div>
+        <div class="kv"><span class="k">Hook errors</span><span class="v" id="kc-hook-errors">—</span></div>
+      </div>
+    </section>
+
+    <!-- Reads zero on both current backends — the loaded MoE weights carry no
+         MTP head. Hidden rather than deleted so it reappears on its own if an
+         MTP model is ever loaded again, instead of needing rediscovery
+         (controller ruling R21 covers the sparkline surviving this hiding). -->
+    <section class="card" id="card-specdec" hidden>
+      <h2>Speculative decoding</h2>
+      <div class="subtitle">Self-hides while attempts are zero on every backend</div>
+      <div class="rows">
+        <div class="kv"><span class="k">MTP attempts</span><span class="v" id="sd-attempts">—</span></div>
+        <div class="kv"><span class="k">MTP accepts</span><span class="v" id="sd-accepts">—</span></div>
+        <div class="kv"><span class="k">MTP accept ratio</span><span class="v" id="sd-ratio">—</span></div>
+        <div class="kv"><span class="k">MTP tokens saved</span><span class="v" id="sd-saved">—</span></div>
+        <div class="kv"><span class="k">Suffix verify steps</span><span class="v" id="sd-suffix-verify">—</span></div>
+        <div class="kv"><span class="k">Suffix accept ratio</span><span class="v" id="sd-suffix-ratio">—</span></div>
+      </div>
+      <div class="spark" id="spark-accept"></div>
+      <div class="spark-cap" id="spark-accept-cap">—</div>
     </section>
 
   </main>
@@ -407,6 +477,18 @@ let connected = false;
 let series = {};
 let version = null;
 let contextWindow = null;
+
+/* renderContext() needs "the last completed request's prompt tokens", but
+   rapid-mlx exposes only a cumulative counter (model_prompt_tokens_total),
+   no per-request gauge and no ring (Task 7's rings are decode/prefill/ttft/
+   accept only). This task touches only public/index.html, so the delta is
+   tracked client-side across ticks — the same idea as server/promSeries.ts's
+   CounterState, just here instead of in a new server-side series. Sticky
+   (updated only when the counter has actually advanced) so the figure holds
+   the last known request's occupancy between ticks, matching how the hero's
+   TTFT/prefill figures hold their last ring value. */
+let lastPromptTotal = null;
+let lastReqPromptTok = null;
 
 /* null = live (render the server's in-memory rings); a number = window width in
    ms, rendered from bucketed history via /api/history/series. */
@@ -602,85 +684,155 @@ function renderHero() {
   $('h-version').textContent = version || '—';
 }
 
-function renderThroughput(m) {
-  $('t-decode').textContent  = fmt(m.display_decode_tok_s ?? m.decode_tok_s, 1);
-  $('t-prefill').textContent = fmt(m.prefill_tok_s ?? m.prompt_tps, 0);
+function renderThroughput() {
+  $('t-decode').textContent = fmtNum(sv('model_decode_tokens_per_second_last'), 1, '');
+  const prefillRing = rings.prefill || [];
+  const lastPrefill = [...prefillRing].reverse().find(v => v !== null) ?? null;
+  $('t-prefill').textContent = fmtNum(lastPrefill, 0, '');
 }
 
-function renderLatency(m) {
-  $('l-ttft').textContent  = fmt(m.ttft_s, 2);
-  $('l-decode').textContent = fmtSec(m.decode_elapsed_s);
-  $('l-total').textContent  = fmtSec(m.request_elapsed_s);
+function renderLatency() {
+  const ttftRing = rings.ttft || [];
+  const lastTtft = [...ttftRing].reverse().find(v => v !== null) ?? null;
+  $('l-ttft').textContent = fmtNum(lastTtft, 2, '');
 }
 
-function renderContext(m) {
-  const used = m.context_len ?? ((m.prompt_tokens || 0) + (m.completion_tokens || 0));
-  const pct = used / CTX_MAX * 100;
-  $('c-used').textContent = fmtCompact(used);
-  $('c-meter').style.width = Math.min(100, pct).toFixed(2) + '%';
-  $('c-pct').textContent = fmt(pct, 1) + '% used';
-  const cached = m.cached_tokens || 0, fresh = m.new_prefill_tokens || 0;
-  $('c-cached').textContent = fmtCompact(cached);
-  $('c-fresh').textContent  = fmtCompact(fresh);
-  const strip = $('c-strip');
-  strip.innerHTML =
-    `<i style="flex-grow:${Math.max(cached, 0.001)};background:var(--s1)" title="cached: ${fmtInt(cached)} tok"></i>` +
-    `<i style="flex-grow:${Math.max(fresh, 0.001)};background:var(--s2)" title="fresh prefill: ${fmtInt(fresh)} tok"></i>`;
-  strip.title = `prompt ${fmtInt(m.prompt_tokens)} tok = ${fmtInt(cached)} cached + ${fmtInt(fresh)} fresh`;
+function renderContext() {
+  /* model_prompt_tokens_total is cumulative; see the lastPromptTotal/
+     lastReqPromptTok comment above for why the per-request delta is tracked
+     here instead of via a server-side ring. */
+  const total = sv('model_prompt_tokens_total');
+  if (total !== null) {
+    if (lastPromptTotal !== null && total > lastPromptTotal) {
+      lastReqPromptTok = total - lastPromptTotal;
+    }
+    lastPromptTotal = total;
+  }
+  const max = contextWindow || CTX_MAX;
+  const used = lastReqPromptTok;
+  $('ctx-used').textContent = fmtCompact(used);
+  $('ctx-max').textContent = fmtCompact(max);
+  const pct = used === null ? null : Math.min(100, (used / max) * 100);
+  $('ctx-meter').style.width = (pct ?? 0).toFixed(2) + '%';
+  $('ctx-pct').textContent = pct === null ? '—' : fmt(pct, 1) + '% of context';
+  $('ctx-max-cap').textContent = max === null ? '—' : fmtInt(max) + ' max';
 }
 
-function renderCache(m) {
-  const src = (m.cache_source || '—').toUpperCase();
-  $('k-source').textContent = src + ' CACHE';
-  const hit = m.session_cache_hit;
-  const hitEl = $('k-hit');
-  hitEl.textContent = hit === true ? 'SESSION HIT' : hit === false ? 'SESSION MISS' : '—';
-  hitEl.className = 'badge ' + (hit === true ? 'ok' : hit === false ? 'bad' : '');
-  $('k-tokens').textContent  = fmtCompact(m.cached_tokens);
-  $('k-restore').textContent = fmtSec(m.cache_restore_time_s);
-  $('k-ssd').textContent     = m.ssd_cache_hit === true ? 'yes' : m.ssd_cache_hit === false ? 'no' : '—';
-  $('k-ssdtok').textContent  = fmtCompact(m.ssd_cached_tokens);
+/* Repoints the card at the prefix cache — rapid-mlx's session-level KV reuse —
+   now that there is no per-request cache_source/session_cache_hit shape to
+   read (spec section 6, brief Step 1). */
+function renderCache() {
+  const hits = sv('prefix_cache_hits_total');
+  const misses = sv('prefix_cache_misses_total');
+  const total = hits === null || misses === null ? null : hits + misses;
+  $('c-hitrate').textContent = total ? ((hits / total) * 100).toFixed(1) + '%' : '—';
+  $('c-hits').textContent = fmtNum(hits, 0, '');
+  $('c-misses').textContent = fmtNum(misses, 0, '');
+  $('c-saved').textContent = fmtNum(sv('prefix_cache_tokens_saved_total'), 0, ' tok');
+  $('c-bytes').textContent = fmtGB(sv('prefix_cache_current_bytes'));
+  $('c-cap').textContent = fmtGB(sv('prefix_cache_cap_bytes'));
+  $('c-evictions').textContent = fmtNum(sv('prefix_cache_pressure_evictions_total'), 0, '');
 }
 
-function renderToolParse(c) {
-  if (!c) return;
-  const ok = c.tool_parse_success || 0;
-  const bads = [
-    ['fallback parses',    c.tool_parse_fallback],
-    ['unknown tool name',  c.unknown_tool_name],
-    ['malformed calls',    c.malformed_tool_call],
-    ['unclosed calls',     c.unclosed_tool_call],
-  ];
-  const bad = bads.reduce((a, b) => a + (b[1] || 0), 0);
-  const total = ok + bad;
-  $('p-rate').textContent = total > 0 ? fmt(ok / total * 100, 1) + '%' : '—';
-
-  $('p-strip').innerHTML = total > 0
-    ? `<i style="flex-grow:${Math.max(ok, 0.001)};background:var(--good)" title="clean parses: ${ok}"></i>` +
-      (bad > 0 ? `<i style="flex-grow:${bad};background:var(--critical)" title="problem parses: ${bad}"></i>` : '')
+/* rapid-mlx has no tool-call parse counters yet (those arrive with the Phase 2
+   capture proxy). Until then this card reports the structured-output health
+   that does exist: response_format="json_schema" strict-mode enforcement. */
+function renderStructuredOutput() {
+  const total = sv('response_format_strict_total');
+  const violations = sv('response_format_strict_violations_total');
+  const clean = total === null || violations === null ? null : total - violations;
+  $('so-rate').textContent = total ? fmtNum((clean / total) * 100, 1, '%') : '—';
+  $('so-strip').innerHTML = total
+    ? `<i style="flex-grow:${Math.max(clean, 0.001)};background:var(--good)" title="clean: ${fmtInt(clean)}"></i>` +
+      (violations > 0 ? `<i style="flex-grow:${violations};background:var(--critical)" title="violations: ${fmtInt(violations)}"></i>` : '')
     : '';
-
-  $('p-rows').innerHTML =
-    `<div class="brow"><span class="swatch" style="background:var(--good)"></span><span class="name">clean parses</span><span class="val">${fmtInt(ok)}</span></div>` +
-    bads.map(([n, v]) => {
-      const bd = v || 0;
-      return `<div class="brow"><span class="swatch" style="background:${bd > 0 ? 'var(--critical)' : 'var(--grid)'}"></span><span class="name">${n}</span><span class="val" ${bd > 0 ? 'style="color:var(--critical)"' : ''}>${fmtInt(bd)}</span></div>`;
-    }).join('');
+  $('so-total').textContent = fmtNum(total, 0, '');
+  $('so-violations').textContent = fmtNum(violations, 0, '');
+  $('so-repairs-att').textContent = fmtNum(sv('response_format_strict_repairs_attempted_total'), 0, '');
+  $('so-repairs-ok').textContent = fmtNum(sv('response_format_strict_repairs_succeeded_total'), 0, '');
+  $('so-repairs-skip').textContent = fmtNum(sv('response_format_strict_repairs_skipped_context_overflow_total'), 0, '');
 }
 
-function renderAll(p) {
-  /* Task 9 only rewires the hero — renderThroughput/renderLatency/renderContext/
-     renderCache/renderToolParse still expect the old per-request `latest` shape,
-     which no rapid-mlx payload carries (Task 10 repoints them at `series` via
-     sv()). Pass an empty object rather than `undefined` so they render their
-     existing null-safe placeholders instead of throwing. */
-  const m = p.latest || {};
+function renderQueue() {
+  $('q-running').textContent = fmtNum(sv('requests_running'), 0, '');
+  $('q-waiting').textContent = fmtNum(sv('requests_waiting'), 0, '');
+  $('q-steps').textContent = fmtNum(sv('steps_executed_total'), 0, '');
+  $('q-cancelled').textContent = fmtNum(sv('requests_cancelled_total'), 0, '');
+  $('q-cancelled-disc').textContent = fmtNum(sv('requests_cancelled_via_disconnect_total'), 0, '');
+}
+
+function renderOutcomes() {
+  const succeeded = sv('model_requests_total{outcome=succeeded}');
+  const cancelled = sv('model_requests_total{outcome=cancelled}');
+  const failed = sv('model_requests_total{outcome=failed}');
+  const total = (succeeded || 0) + (cancelled || 0) + (failed || 0);
+  $('o-strip').innerHTML = total > 0
+    ? `<i style="flex-grow:${Math.max(succeeded || 0, 0.001)};background:var(--good)" title="succeeded: ${fmtInt(succeeded)}"></i>` +
+      (cancelled ? `<i style="flex-grow:${cancelled};background:var(--warning)" title="cancelled: ${fmtInt(cancelled)}"></i>` : '') +
+      (failed ? `<i style="flex-grow:${failed};background:var(--critical)" title="failed: ${fmtInt(failed)}"></i>` : '')
+    : '';
+  $('o-succeeded').textContent = fmtNum(succeeded, 0, '');
+  $('o-cancelled').textContent = fmtNum(cancelled, 0, '');
+  $('o-failed').textContent = fmtNum(failed, 0, '');
+  $('o-rep-stops').textContent = fmtNum(sv('repetition_loop_stops_total'), 0, '');
+  $('o-rep-breaks').textContent = fmtNum(sv('repetition_loop_breaks_total'), 0, '');
+}
+
+function renderMemoryDetail() {
+  $('m-active').textContent = fmtGB(sv('metal_active_memory_bytes'));
+  $('m-peak').textContent = fmtGB(sv('metal_peak_memory_bytes'));
+  $('m-cache').textContent = fmtGB(sv('metal_cache_memory_bytes'));
+  $('m-cap-violations').textContent = fmtNum(sv('metal_cap_violations_total'), 0, '');
+  $('m-ubc-evicted').textContent = fmtGB(sv('ubc_evicted_bytes_total{path_kind=safetensors}'));
+}
+
+function renderKvCheckpoints() {
+  $('kc-writes').textContent = fmtNum(sv('kv_checkpoint_writes_total'), 0, '');
+  $('kc-loads').textContent = fmtNum(sv('kv_checkpoint_loads_total'), 0, '');
+  $('kc-bytes').textContent = fmtGB(sv('kv_checkpoint_bytes'));
+  $('kc-evictions').textContent = fmtNum(sv('kv_checkpoint_evictions_total'), 0, '');
+  $('kc-hook-errors').textContent = fmtNum(sv('kv_checkpoint_hook_errors_total'), 0, '');
+}
+
+/* Reads zero on both current backends — the MoE weights carry no MTP head.
+   Hidden rather than deleted so it reappears by itself if an MTP model is
+   loaded again, instead of needing to be rediscovered.
+
+   The brief's snippet checked bare 'spec_decode_attempts_total' /
+   'suffix_decode_verify_steps_total', but rapid-mlx actually emits these with
+   a method label (confirmed against a live /api/metrics: 'spec_decode_
+   attempts_total{method=mtp}', 'suffix_decode_verify_steps_total{method=
+   suffix}' — see task-10-report.md). The bare names never match anything in
+   `series`, so sv() would always return null and this card would stay hidden
+   forever even if MTP were reactivated — exactly the failure this card exists
+   to avoid. Reading the labeled keys below is a deliberate deviation from the
+   brief's literal snippet to keep the self-hide/self-show behavior real. */
+function renderSpecDecode() {
+  const attempts = sv('spec_decode_attempts_total{method=mtp}');
+  const suffix = sv('suffix_decode_verify_steps_total{method=suffix}');
+  const active = (attempts !== null && attempts > 0) || (suffix !== null && suffix > 0);
+  $('card-specdec').hidden = !active;
+  if (!active) return;
+  $('sd-attempts').textContent = fmtNum(attempts, 0, '');
+  $('sd-accepts').textContent = fmtNum(sv('spec_decode_accepts_total{method=mtp}'), 0, '');
+  $('sd-ratio').textContent = fmtNum(sv('spec_decode_accept_ratio{method=mtp}'), 3, '');
+  $('sd-saved').textContent = fmtNum(sv('spec_decode_tokens_saved_total{method=mtp}'), 0, ' tok');
+  $('sd-suffix-verify').textContent = fmtNum(suffix, 0, '');
+  $('sd-suffix-ratio').textContent = fmtNum(sv('suffix_decode_accept_ratio{method=suffix}'), 3, '');
+}
+
+function renderAll() {
   renderHero();
-  renderThroughput(m);
-  renderLatency(m);
-  renderContext(m);
-  renderCache(m);
-  renderToolParse(p.toolParseCounters);
+  renderThroughput();
+  renderLatency();
+  renderContext();
+  renderCache();
+  renderStructuredOutput();
+  renderQueue();
+  renderOutcomes();
+  renderMemoryDetail();
+  renderKvCheckpoints();
+  renderSpecDecode();
 }
 
 /* ================================================================= status */
@@ -815,7 +967,7 @@ function applyPayload(p) {
     document.body.classList.remove('disconnected');
   }
 
-  renderAll(p);
+  renderAll();
   renderStatus();
   /* Never call sparks.*.render() from here — renderSparks() is the only call
      site, because it is what consults the range selector. A direct call would

@@ -1,0 +1,32 @@
+[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting
+[dream-nightly:patch] • 1/gateway toJsonSafeValue helper + json-safe tool-result: already present
+[dream-nightly:patch] • 2/subagent adapter parse double-encoded content_blocks: already present
+[dream-nightly:patch] 
+[dream-nightly:patch] applied=0 present=2 failed=0
+[dream-nightly] cycling sources: default calendar gstack gstack-code-xylophone-e88b2316 hermes limitless mail mem memorable social 
+[dream-nightly:export] [export-career-ops] split applications tracker: ok 122 page(s) by company
+[dream-nightly:export] [export-career-ops] transformed: 470 ok, 0 no-role, 0 no-h1, 4 skipped (metafiles)
+[dream-nightly:export] [export-career-ops] linked 330 evaluations to a company dossier; 83 companies have none
+[dream-nightly:export] [export-career-ops] unlinked companies listed in /Users/styledelk/mybrain/.career-ops-unlinked.txt
+[dream-nightly:export] [export-career-ops] mirrored into /Users/styledelk/mybrain/career-ops
+No stale pages — extraction is up to date.
+Dream cycle (partial) in 1.4s:
+  ✓ lint        0 fix(es) applied; 1735 non-fixable (informational)
+  ✓ backlinks   578 missing back-link(s) found (audit-only; run gbrain check-backlinks fix to materialize)
+  ✓ sync        +0 added, ~0 modified, -0 deleted
+  ✓ extract     0 link(s), 0 timeline entries (incremental: 0 slugs)
+  ! extract_facts  extract_facts skipped: 4 legacy v0.31 facts pending fence backfill
+  ✓ recompute_emotional_weight  recompute_emotional_weight (incremental, 0 slugs)
+[dream-nightly] stamped last_full_cycle_at for default
+Dream cycle (partial) in 812.4s:
+  ! extract_atoms  extract_atoms: 124 atoms from 2/27 transcripts + 49/50 pages (1 failed)
+      ✗ career-ops/by-company/n8n: malformed model output: unparseable JSON array (consecutive failure 1 on this content)
+  ✓ consolidate  promoted 2 facts into 1 takes across 596 buckets
+  ✓ propose_takes  propose_takes: scanned 100 pages, 0 cached, 101 new proposals, 0 orphans reaped, 41 empty (run propose-20260905111530-ab69745f)
+  ✓ conversation_facts_backfill  0 facts inserted across 10/10 sources, ~$0.0000 spent
+  - enrich_thin  cycle.enrich_thin.enabled=false (default OFF)
+  ✓ schema-suggest  16 suggestions emitted
+No stale pages — extraction is up to date.
+Brain is healthy. 6 phase(s) checked in 0.5s.
+[dream-nightly] stamped last_full_cycle_at for calendar
+Brain is healthy. 6 phase(s) checked in 34.1s.

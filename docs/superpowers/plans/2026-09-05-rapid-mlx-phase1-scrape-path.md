@@ -401,6 +401,24 @@ test('dropping model still leaves genuine dimensions', () => {
   assert.equal(n, 'model_requests_total{outcome=failed}');
 });
 
+/* Label values are free-form. Without encoding, {a:'x', b:'y'} and
+   {a:'x,b=y'} both render as m{a=x,b=y} — two unrelated series sharing one
+   persisted key, unrecoverably merged. */
+test('label values that contain separators cannot collide', () => {
+  const flat = seriesName({ name: 'm', labels: { a: 'x', b: 'y' }, value: 0 });
+  const nested = seriesName({ name: 'm', labels: { a: 'x,b=y' }, value: 0 });
+  assert.notEqual(flat, nested);
+  assert.equal(flat, 'm{a=x,b=y}');
+  assert.equal(nested, 'm{a=x%2Cb%3Dy}');
+});
+
+test('braces and percent signs in a label value are encoded', () => {
+  assert.equal(
+    seriesName({ name: 'm', labels: { a: '{100%}' }, value: 0 }),
+    'm{a=%7B100%25%7D}'
+  );
+});
+
 test('a real fixture sample produces a compact series name', () => {
   const s = parsePrometheus(fixture('rapid-mlx-0.13.4-after-first-request.txt'));
   const sample = findSample(s, 'rapid_mlx_model_requests_total', { outcome: 'succeeded' });
@@ -477,6 +495,19 @@ const DROPPED_LABELS = new Set(['model', 'family']);
 
 const PREFIX = 'rapid_mlx_';
 
+/** Percent-encodes the four characters that carry structure in a series name,
+ *  plus `%` itself so the encoding is reversible.
+ *
+ *  Prometheus label values are free-form strings: nothing stops a future
+ *  rapid-mlx version emitting `reason="a,b"`. Unencoded, `{a=x,b=y}` and
+ *  `{a="x,b=y"}` collapse to the identical key, and because these strings are
+ *  persisted, two unrelated series would merge into one history that can never
+ *  be separated again. Encoding is free here and impossible to retrofit once
+ *  rows exist. */
+function encodeLabelValue(v: string): string {
+  return v.replace(/[%,={}]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+}
+
 /** Stable DB key for a sample. Label keys are sorted so the same sample always
  *  produces the same string regardless of scrape ordering — these strings are
  *  persisted, so instability would fragment history into parallel series. */
@@ -490,7 +521,7 @@ export function seriesName(sample: PromSample): string {
     .sort();
   if (!keys.length) return base;
 
-  const parts = keys.map(k => `${k}=${sample.labels[k]}`);
+  const parts = keys.map(k => `${k}=${encodeLabelValue(sample.labels[k])}`);
   return `${base}{${parts.join(',')}}`;
 }
 
@@ -530,7 +561,7 @@ export function detectRestart(
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `node --disable-warning=ExperimentalWarning --import tsx --test server/promSeries.test.ts`
-Expected: PASS, 13 tests.
+Expected: PASS, 15 tests.
 
 - [ ] **Step 5: Typecheck and commit**
 
@@ -2504,7 +2535,7 @@ git commit -m "chore: retire MTPLX artifacts, document the rapid-mlx architectur
 
 ## Done when
 
-- `npm test` passes: `promParse` (13), `promSeries` (13), `runTracker` (10), `targets` (5), `promScraper` (5), `db` (existing plus 8 new).
+- `npm test` passes: `promParse` (13), `promSeries` (15), `runTracker` (10), `targets` (5), `promScraper` (5), `db` (existing plus 8 new).
 - `npm run typecheck` and `npm run build` are clean.
 - The dashboard shows live throughput, memory, queue, prefix-cache and outcome data against the real `:8000` server.
 - Exactly one `run` row exists after several minutes of uptime.

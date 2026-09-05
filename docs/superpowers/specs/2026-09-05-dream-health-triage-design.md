@@ -131,9 +131,10 @@ Four failure modes, all required:
 
 ## 4. Data model
 
-Four tables added to the existing `data/history.db` alongside `run` / `request` /
-`transcript` / `gauge`. `SCHEMA_VERSION` goes 2 → 3; the existing set-aside path handles
-the mismatch by moving the old file aside, so no migration is written.
+Four dream tables added to the existing `data/history.db` alongside `run` / `request` /
+`transcript` / `gauge`, plus a single-row `dream_ingest` table holding the byte offset §5
+requires. `SCHEMA_VERSION` goes 2 → 3; the existing set-aside path handles the mismatch by
+moving the old file aside, so no migration is written.
 
 - **`dream_run`** — one row per `starting` line.
   `started_at`, `ended_at`, `exit_code`, `global_pass_rc`, `committed_sha`,

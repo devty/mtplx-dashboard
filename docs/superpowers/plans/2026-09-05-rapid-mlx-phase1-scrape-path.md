@@ -1778,7 +1778,7 @@ test('valid boundary proxy ports are accepted', () => {
 - [ ] **Step 3: Run the tests**
 
 Run: `node --disable-warning=ExperimentalWarning --import tsx --test server/targets.test.ts`
-Expected: PASS, 9 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 4: Commit**
 
@@ -2272,7 +2272,7 @@ git rm server/metricsPoller.ts
 node --disable-warning=ExperimentalWarning --import tsx --test server/promScraper.test.ts
 ```
 
-Expected: PASS, 9 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 6: Commit**
 
@@ -2757,7 +2757,7 @@ git commit -m "chore: retire MTPLX artifacts, document the rapid-mlx architectur
 
 ## Done when
 
-- `npm test` passes: `promParse` (13), `promSeries` (15), `runTracker` (12), `targets` (9), `promScraper` (5), `db` (existing plus 8 new).
+- `npm test` passes: `promParse` (13), `promSeries` (15), `runTracker` (12), `targets` (8), `promScraper` (5), `db` (existing plus 8 new).
 - `npm run typecheck` and `npm run build` are clean.
 - The dashboard shows live throughput, memory, queue, prefix-cache and outcome data against the real `:8000` server.
 - Exactly one `run` row exists after several minutes of uptime.

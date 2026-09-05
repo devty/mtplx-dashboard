@@ -60,3 +60,49 @@ test('night detail returns null for an unknown date', () => {
   assert.equal(createDreamService(store, env).night('1999-01-01'), null);
   store.close();
 });
+
+/* The two tests below pin the 30-second cache itself — the feature this
+   module and its docstring are named for. Before these, every test here
+   called nights()/night() exactly once per service instance, so a
+   regression that silently removed or broke the cache (e.g. flipping the
+   `<` to `<=` or `>` at the comparison in dreamService.ts) would still pass
+   the full suite. */
+
+test('a cached result survives a log change within the 30s window (cache exists)', () => {
+  const { store, env, dir } = harness();
+  const svc = createDreamService(store, env);
+
+  const first = svc.nights(14);
+  assert.equal(first.status.ok, true);
+
+  // Black-box probe: if the cache is live, this second call never re-reads
+  // the log, so deleting it has no effect. If the cache were removed, the
+  // second call would hit ENOENT and report ok:false.
+  fs.unlinkSync(path.join(dir, 'dream.log'));
+  const second = svc.nights(14);
+  assert.equal(second.status.ok, true);
+  store.close();
+});
+
+test('the cache expires after 30s and re-reads the log (cache expiry)', () => {
+  const { store, env, dir } = harness();
+  let t = 1_000_000;
+  const svc = createDreamService(store, env, () => t);
+
+  const first = svc.nights(14);
+  assert.equal(first.status.ok, true);
+
+  fs.unlinkSync(path.join(dir, 'dream.log'));
+
+  // Still inside the 30s window: cache hit, deletion invisible.
+  t += 29_999;
+  const stillCached = svc.nights(14);
+  assert.equal(stillCached.status.ok, true);
+
+  // Past the 30s window: cache must expire and re-read the (now-missing) log.
+  t += 2;
+  const expired = svc.nights(14);
+  assert.equal(expired.status.ok, false);
+  assert.ok(expired.status.error);
+  store.close();
+});

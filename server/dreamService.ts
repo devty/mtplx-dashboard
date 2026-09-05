@@ -23,7 +23,13 @@ export interface DreamService {
   night(date: string): DreamNightDetail | null;
 }
 
-export function createDreamService(store: Store, env: NodeJS.ProcessEnv = process.env): DreamService {
+export function createDreamService(
+  store: Store,
+  env: NodeJS.ProcessEnv = process.env,
+  /** Injectable clock. Defaults to Date.now; tests pass a fake to pin the
+   *  cache's 30-second expiry without sleeping or monkey-patching Date. */
+  clock: () => number = Date.now
+): DreamService {
   const home = os.homedir();
   const ingest = createDreamIngest({
     store,
@@ -38,7 +44,7 @@ export function createDreamService(store: Store, env: NodeJS.ProcessEnv = proces
   let lastAt = 0;
 
   const refresh = (): DreamIngestResult => {
-    const now = Date.now();
+    const now = clock();
     if (last && now - lastAt < CACHE_MS) return last;
     last = ingest.run(now);
     lastAt = now;

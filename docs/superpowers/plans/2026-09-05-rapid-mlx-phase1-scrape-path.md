@@ -2582,6 +2582,37 @@ function renderHero() {
 }
 ```
 
+- [ ] **Step 2b: Make sparklines survive a missing element**
+
+Replacing the hero removes `#spark-accept` and `#spark-accept-cap`, which lived inside it — but their JavaScript is at module scope and still runs. `makeSpark($('spark-accept'), …)` calls `el.appendChild(tip)` on `null`, which throws and takes the **entire inline script down with it**: no renderers, no SSE wiring, no event handlers, and every field frozen at `—`. Nothing server-side can observe this; the markup is served perfectly.
+
+Task 10 re-homes the accept sparkline in the self-hiding spec-decode card. Until then — and permanently, since that card is *conditionally hidden* — a spark whose element is absent must degrade rather than throw. Add this guard as the first lines of `makeSpark`:
+
+```js
+function makeSpark(el, opts) {
+  /* An inert renderer when the card is not on this page, or is hidden until
+     its metric goes live. Construction happens at module scope, before any
+     card is conditionally shown, so one missing element must never take the
+     whole script — and with it every renderer and the SSE wiring — down. */
+  if (!el) return { render() {} };
+  const tip = document.createElement('div');
+```
+
+and guard the caption write at the end of `renderSparks()`, which reads the same removed element:
+
+```js
+  const cap = $('spark-accept-cap');
+  if (cap) {
+    const vals = r.accept.filter(v => v != null);
+    cap.textContent = vals.length
+      ? fmt((vals.reduce((a, b) => a + b, 0) / vals.length) * 100, 1) + '% mean over ' +
+        vals.length + (rangeMs === null ? ' requests' : ' buckets')
+      : '—';
+  }
+```
+
+This matches the project's standing convention that renderers no-op gracefully on absent data; it now extends to absent *elements*, because cards may be conditionally rendered.
+
 - [ ] **Step 3: Rewrite `applyPayload`**
 
 ```js
@@ -2676,6 +2707,8 @@ function renderCache() {
 - [ ] **Step 2: Add the new cards**
 
 Add four `<section class="card">` blocks following the existing markup idiom (`<h2>`, `.subtitle`, `.kv` rows), each with a matching `render*` function called from `renderAll`:
+
+The spec-decode card must also carry `<div id="spark-accept"></div>` and a `<div id="spark-accept-cap" class="muted"></div>`, re-homing the acceptance sparkline that lived in the old hero. `renderSparks()` and `makeSpark` already tolerate their absence while the card is hidden (Task 9, Step 2b).
 
 - **Queue** — `requests_running`, `requests_waiting`, `steps_executed_total`, `requests_cancelled_total`, `requests_cancelled_via_disconnect_total`.
 - **Request outcomes** — `model_requests_total{outcome=succeeded|cancelled|failed}`, plus `repetition_loop_stops_total` and `repetition_loop_breaks_total` as a generation-quality signal.

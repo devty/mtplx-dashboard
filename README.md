@@ -1,77 +1,70 @@
-# MTPLX Dashboard
+# rapid-mlx Dashboard
 
-A beautiful realtime dashboard, live activity log, and run-comparison view for a local
-[MTPLX](https://mtplx.com) inference server. A small Node/TypeScript server polls MTPLX's
-`/metrics` endpoint itself and pushes updates to the browser over Server-Sent Events — all four
-pages (`public/index.html`, `public/log.html`, `public/detail.html`, `public/history.html`) stay
-plain HTML/CSS/JS, no client framework, no build step for the frontend.
+A realtime dashboard and run-comparison view for a local rapid-mlx inference server on Apple
+Silicon. A small Node/TypeScript server scrapes rapid-mlx's Prometheus `/metrics`
+endpoint itself and pushes updates to the browser over Server-Sent Events — all four pages
+(`public/index.html`, `public/log.html`, `public/detail.html`, `public/history.html`) stay plain
+HTML/CSS/JS, no client framework, no build step for the frontend.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **What it's for:** MTPLX runs LLMs on Apple Silicon using **MTP (multi-token-prediction)
-> speculative decoding**. Its server exposes a rich `/metrics` endpoint — this project turns
-> that into (1) a dashboard that tells the *speculative-decoding* story at a glance, and
-> (2) a "tail -f for the model" live log of what's being generated right now.
+> **What it's for:** rapid-mlx runs LLMs on Apple Silicon and exposes a standard Prometheus
+> text-exposition `/metrics` endpoint — decode/prefill throughput, TTFT histograms, prefix-cache
+> and Metal-memory gauges, queue depth, and speculative-decoding counters. This project turns that
+> into a live dashboard, plus SQLite-backed history so a fresh browser tab or a restart doesn't
+> lose depth.
+>
+> **What it is not, yet:** rapid-mlx exposes no per-request identity anywhere — no request id, no
+> prompt preview, no transcript, not even for in-flight work (`/v1/status.requests` stays empty
+> while a request is running). The live per-request log and its detail page are placeholders in
+> this phase; they return once a capture proxy sits in the request path (Phase 2 of the design doc
+> under `docs/superpowers/specs/`).
 
 ### Dashboard
-![MTPLX metrics dashboard](docs/dashboard.png)
-
-### Live activity log
-![MTPLX live activity log](docs/live-log.png)
+![rapid-mlx metrics dashboard](docs/dashboard.png)
 
 ---
 
 ## Pages
 
 ### `public/index.html` — Metrics dashboard
-The hero is **speculative decoding**: tokens committed per verify pass (an autoregressive
-decoder yields 1.0), accepted-vs-drafted per depth, and acceptance probability — the numbers
-that explain *why* MTP is fast. Around it:
+The hero is **throughput, memory and queue depth** — decode tok/s (p50/p90), Metal active/peak
+bytes, and requests running/waiting — the numbers that are actually live once speculative decoding
+reads zero on this deployment. Around it:
 
 - **Decode & prefill throughput** (tok/s) with live sparklines
-- **Time to first token**
-- **Context window** usage with a cached-vs-fresh-prefill split
-- **Verify-time breakdown** — where decode time actually goes
-- **KV cache** (RAM/SSD source + hit) and **tool-call parse health**
+- **Time to first token** — real p50/p90 from the engine's own histogram buckets
+- **Context window** usage (prompt-token distribution vs. `/v1/models`' `context_window`)
+- **Prefix cache** (hits/misses/nodes/lookup latency) and **Metal memory** detail
+- **Queue depth** and **request outcomes** (succeeded/cancelled/failed)
+- **Structured-output / tool-call parse health**
+- **Speculative decoding** as a normal card that self-hides while `spec_decode_attempts_total` is
+  zero (true on both backends today — the MoE weights currently loaded carry no MTP head) so it
+  lights back up automatically if an MTP model is ever loaded again.
 
-### `public/log.html` — Live activity log
-One row per completed request, newest first:
+A **live / 1h / 24h / 7d** range selector redraws the sparklines from bucketed SQLite history
+instead of the live in-memory rings.
 
-- **Headline:** the prompt (server-truncated preview)
-- **Chips:** tokens in→out · decode tok/s · TTFT · elapsed · conversation depth ·
-  tool-calls made · acceptance % · reasoning/thinking flag · client · short request id · live "Ns ago"
-- **Click any row** to expand a full detail drawer: every timing/token field, per-depth
-  acceptance bars, the conversation role sequence, and available tools.
-- **Open full detail page ↗** (link at the bottom of any drawer) jumps to `public/detail.html`.
+### `public/log.html` — Live activity log (unavailable this phase)
+Shows a single explanatory panel rather than an empty feed — an empty live log is otherwise
+indistinguishable from an idle server. Returns with the Phase 2 capture proxy.
 
-### `public/detail.html` — Single-request detail
-A standalone, linkable view of one request (`detail.html?id=<request_id>`), built off the same
-SSE payload. Reachable from the drawer permalink in the log. Shows the prompt preview plus every
-metrics field grouped into cards — overview, tokens/throughput, latency & verify-time breakdown,
-context & cache, speculative acceptance (with mean accept probability) by depth, and conversation
-shape. An id that has scrolled out of the server's rolling log buffer shows a clear "not in the
-buffer" state rather than a blank page.
-
-By default it shows metadata only — stock `/metrics` carries a 180-char preview of the last user
-message and **no response body** — so it renders the preview with an honest "showing 180 of N
-chars" indicator (see Limitations). If you run a body-capture-enabled MTPLX (apply
-[`patches/mtplx-full-transcript-capture.patch`](./patches/README.md) and set
-`MTPLX_DASHBOARD_CAPTURE_BODIES=1`), the record also carries `request_messages_full` +
-`response_text`, and the page adds **Full prompt** (per-message transcript) and **Response** cards.
-These fields are optional — the page degrades gracefully to the preview when they're absent.
-
-That patch edits the *installed* mtplx package, so every MTPLX upgrade reverts it silently — run
-`npm run mtplx:postupgrade -- --fix` afterwards to detect and repair it.
+### `public/detail.html` — Single-request detail (unavailable this phase)
+Was a permalink target for a log row (`detail.html?id=<request_id>`); there is no row to link from
+now, so it shows the same explanatory panel. Returns with Phase 2.
 
 ### `public/history.html` — Run history & comparison
-Every detected MTPLX run (restart), newest first, with per-run request counts and decode/TTFT/
-acceptance aggregates. Check two rows to see a config diff — scoped to the six columns actually
-promoted onto a `run` row (model, runtime mode, depth, verify core, paged-KV quantization, context
-window), not a deep diff of the full `/health` blob, which carries dozens of internal flags that
-would bury a real change in noise. Below the table, four gauge charts (session-bank usage,
-active/completed requests) show dashed markers at each run's start. Unlike the other three pages,
-this one has no SSE connection — it fetches on load and offers a manual **Refresh** button, since
-historical/forensic browsing has no need for sub-minute freshness.
+Every detected rapid-mlx run (a restart, inferred from `rapid_mlx_uptime_seconds` decreasing
+between scrapes), newest first, with per-run request counts and decode/TTFT aggregates — these
+read as zero/`—` until the Phase 2 capture proxy is recording requests. Check two rows to see a
+config diff, scoped to the columns actually promoted onto a `run` row (model, version, KV-cache
+dtype, turboquant mode, spec-decode method, engine type, context window), not a deep diff of the
+full `/health`+`/v1/status`+`build_info` blob, which carries dozens of internal flags that would
+bury a real change in noise. Below the table, one gauge chart per series **discovered from the
+scrape** (the family set is not fixed — 59 families on a cold server, 73 after first traffic, 80 on
+a second backend — so this list is never hardcoded) shows dashed markers at each run's start.
+Unlike `index.html`, this page has no SSE connection — it fetches on load and offers a manual
+**Refresh** button, since historical/forensic browsing has no need for sub-minute freshness.
 
 The pages cross-link via a header nav.
 
@@ -79,8 +72,8 @@ The pages cross-link via a header nav.
 
 ## Quick start
 
-You need a running MTPLX server with its OpenAI-compatible endpoint (and `/metrics`) on
-`http://127.0.0.1:8000` — the default target this server polls. Node `>=22.5` is required (see
+You need a running rapid-mlx server with its Prometheus `/metrics` endpoint reachable — the
+default target this server scrapes is `http://127.0.0.1:8000`. Node `>=22.5` is required (see
 `engines` in `package.json`) because the SQLite persistence layer (below) uses the built-in
 `node:sqlite` module rather than a third-party driver — no extra dependency needed, but the
 version floor is firm.
@@ -92,7 +85,6 @@ npm install
 npm run dev
 # then open:
 #   http://127.0.0.1:8123/              → dashboard
-#   http://127.0.0.1:8123/log.html      → live log
 #   http://127.0.0.1:8123/history.html  → run history & comparison
 ```
 
@@ -105,64 +97,75 @@ npm run build
 npm start
 ```
 
-`npm test` runs the `node:test` unit tests for the SQLite persistence layer (`server/db.ts`)
-against a throwaway on-disk SQLite file in a temp directory — not `:memory:`, because an
-in-memory database is private to the connection that opened it and the tests assert through a
-second read connection. There is no frontend test harness; verify page changes by loading them
-against a real MTPLX instead.
+`npm test` runs `node:test` unit tests covering the Prometheus parser (`promParse.ts`, against
+golden fixtures captured from live servers, including families that only appear after first
+traffic), series-name derivation and counter-delta/restart logic (`promSeries.ts`), run detection
+(`runTracker.ts`), target-list parsing (`targets.ts`), the scrape loop's per-interval derivations
+(`promScraper.ts`), and the SQLite persistence layer (`db.ts`) — the last against a throwaway
+on-disk file in a temp directory, not `:memory:`, because an in-memory database is private to the
+connection that opened it and the tests assert through a second read connection. There is no
+frontend test harness; verify page changes by loading them against a real rapid-mlx instance.
 
 ### Configuration
 
-The server polls a single, configured MTPLX target — set these as environment variables
+The server scrapes one configured rapid-mlx target — set these as environment variables
 (`.env.example` documents the same list; this project has no `dotenv` dependency, so either
 `export` them in your shell, pass them inline, or use Node's native `--env-file=.env` flag):
 
-| Variable            | Default                  | Meaning                                            |
-|---------------------|---------------------------|-----------------------------------------------------|
-| `MTPLX_URL`         | `http://127.0.0.1:8000`   | MTPLX server this process polls                     |
-| `PORT`              | `8123`                    | Port this dashboard server listens on               |
-| `POLL_INTERVAL_MS`  | `1000`                    | How often to poll MTPLX's `/metrics`                |
-| `MTPLX_TIMEOUT_MS`  | `2500`                    | Timeout per poll request                            |
-| `RING_SIZE`         | `120`                     | Sparkline history depth (dashboard)                 |
-| `LOG_BUFFER_SIZE`   | `300`                     | Live-log rolling buffer depth                        |
-| `MAX_BACKOFF_MS`    | `10000`                   | Ceiling for poll-retry backoff when MTPLX is down    |
-| `DB_PATH`           | `data/history.db`         | SQLite history file. Relative paths resolve against the repo root. |
-| `PERSIST_ENABLED`   | `1`                       | `0` disables all persistence; the dashboard runs live-only. |
-| `RETENTION_DAYS`    | `30`                      | Rows older than this are pruned.                     |
-| `PRUNE_INTERVAL_MS` | `3600000`                 | How often the prune runs.                            |
-| `HEALTH_INTERVAL_MS`| `5000`                    | `/health` poll cadence; also drives the model chip.  |
+| Variable                     | Default                              | Meaning                                            |
+|-------------------------------|---------------------------------------|-----------------------------------------------------|
+| `RAPID_MLX_TARGETS`          | `qwen=http://127.0.0.1:8000:8010`     | Comma-separated `id=<upstreamUrl>[:<proxyPort>][\|label]` list. One entry in this phase; the `:<proxyPort>` suffix is parsed now but unused until the Phase 2 capture proxy. |
+| `PORT`                       | `8123`                                | Port this dashboard server listens on               |
+| `POLL_INTERVAL_MS`           | `1000`                                | How often to scrape `/metrics`                      |
+| `SCRAPE_TIMEOUT_MS`          | `2500`                                | Timeout per scrape request (separate from any future forward-path timeout — see the design doc) |
+| `RING_SIZE`                  | `120`                                 | Sparkline history depth (dashboard, live view)      |
+| `LOG_BUFFER_SIZE`            | `300`                                 | Reserved for the Phase 2 live-log buffer; unused while `log.html` has no data source |
+| `MAX_BACKOFF_MS`             | `10000`                               | Ceiling for scrape-retry backoff when rapid-mlx is unreachable |
+| `DB_PATH`                    | `data/history.db`                     | SQLite history file. Relative paths resolve against the repo root. |
+| `PERSIST_ENABLED`            | `1`                                   | `0` disables all persistence; the dashboard runs live-only. |
+| `RETENTION_DAYS`             | `30`                                  | Rows older than this are pruned.                     |
+| `TRANSCRIPT_RETENTION_DAYS`  | `7`                                   | Reserved for Phase 2 transcript rows; the `transcript` table exists now but nothing writes to it yet. |
+| `PRUNE_INTERVAL_MS`          | `3600000`                             | How often the prune runs.                            |
+| `HEALTH_INTERVAL_MS`         | `5000`                                | `/health`+`/v1/status`+`/v1/models` poll cadence.    |
+| `GAUGE_PERSIST_INTERVAL_MS`  | `10000`                               | Gauge persistence interval — much slower than the scrape itself; unchanged series are also skipped, since ~74 series at 1 Hz would be ~6.4M rows/day. |
 
 ```bash
-MTPLX_URL=http://box.local:8000 npm run dev
+RAPID_MLX_TARGETS='qwen=http://box.local:8000:8010' npm run dev
 ```
 
 ### Project layout
 
 ```
 mtplx-dashboard/
-├── server/              TypeScript server — polls MTPLX, pushes SSE
+├── server/              TypeScript server — scrapes rapid-mlx, pushes SSE
 │   ├── server.ts          Express app: serves public/, /api/events (SSE), /api/metrics,
-│   │                        /api/history/series, /api/history/gauges, /api/history/runs,
-│   │                        /api/history/runs/:id
-│   ├── metricsPoller.ts   Poll loop, retry/backoff, ring/log buffers, change detection,
-│   │                        request-row + tool-parse-gauge persistence
-│   ├── healthPoller.ts    Low-frequency /health loop — run detection, gauges, model chip
-│   ├── db.ts              SQLite persistence: schema, writes/queries via node:sqlite,
+│   │                        /api/history/series, /api/history/gauges, /api/history/gauge-names,
+│   │                        /api/history/runs, /api/history/runs/:id
+│   ├── targets.ts         RAPID_MLX_TARGETS parsing
+│   ├── promParse.ts       Pure Prometheus text-exposition parser (no I/O)
+│   ├── promSeries.ts      Series-name derivation, counter-delta state, restart detection
+│   ├── promScraper.ts     Scrape loop, retry/backoff, ring buffers, change detection, gauge
+│   │                        persistence — replaces the old MTPLX-era metricsPoller.ts
+│   ├── runTracker.ts      Run identity from rapid_mlx_uptime_seconds
+│   ├── healthPoller.ts    Low-frequency /health + /v1/status + /v1/models cache
+│   ├── db.ts              SQLite persistence: schema v2, writes/queries via node:sqlite,
 │   │                        bucketed range queries, pruning
-│   ├── db.test.ts         node:test unit tests for db.ts (npm test)
+│   ├── db.test.ts, promParse.test.ts, promSeries.test.ts, runTracker.test.ts,
+│   │   targets.test.ts, promScraper.test.ts    node:test unit tests (npm test)
+│   ├── fixtures/          Golden Prometheus scrapes captured from live servers
 │   ├── sse.ts             SSE client registry, broadcast, heartbeat
 │   ├── config.ts          Env var → config
-│   └── types.ts           Shared MetricsRecord / StatePayload shapes
+│   └── types.ts           Shared RingBuffers / StatePayload shapes
 ├── public/              Static frontend — plain HTML/CSS/JS, no build step
 │   ├── index.html         Metrics dashboard (with live/1h/24h/7d history range selector)
-│   ├── log.html           Live activity log
-│   ├── detail.html        Standalone single-request detail page
-│   └── history.html       Run history: run table, config diff, gauge charts with restart markers
+│   ├── log.html           Explains why the live log is unavailable this phase
+│   ├── detail.html        Same, for the old per-request permalink target
+│   └── history.html       Run history: run table, config diff, discovered gauge charts
 ├── data/                SQLite history file lives here by default (DB_PATH, gitignored)
-├── docs/                README screenshots
+├── docs/                README screenshots and the design docs under docs/superpowers/specs/
 ├── package.json         Scripts: dev / build / start / test / typecheck
 ├── tsconfig.json
-└── .env.example         Documents the env vars below (not auto-loaded)
+└── .env.example         Documents the env vars above (not auto-loaded)
 ```
 
 `npm run dev`/`npm start` compile nothing on their own from `public/` — those files are served
@@ -172,37 +175,38 @@ as-is by `express.static`. Only `server/**/*.ts` goes through TypeScript.
 
 ## How it works
 
-- A Node/TypeScript server (`server/`) polls `GET {MTPLX_URL}/metrics` on an interval, server-side
-  — not the browser. The response is `{ latest, recent[32], tool_parse_counters }` — `latest` is
-  the most recent request, `recent` is MTPLX's own rolling 32-deep history.
-- The server keeps its own deeper in-memory history (sparkline ring buffers sized `RING_SIZE`,
-  a live-log buffer sized `LOG_BUFFER_SIZE`, deduped by `request_id`) and retries with exponential
-  backoff (capped at `MAX_BACKOFF_MS`) when MTPLX is unreachable.
+- A Node/TypeScript server (`server/`) scrapes `GET {upstreamUrl}/metrics` on an interval,
+  server-side — not the browser. The response is standard Prometheus text exposition: families,
+  types, labels, and values, with no request identity anywhere.
+- The server keeps its own in-memory sparkline history (ring buffers sized `RING_SIZE`) and
+  retries with exponential backoff (capped at `MAX_BACKOFF_MS`) when rapid-mlx is unreachable.
+  Unlike the old MTPLX-era poller, these rings start **empty** on every restart — a Prometheus
+  scrape has no rolling-window equivalent to seed from, so depth rebuilds live.
 - Browsers connect once via `EventSource` to `/api/events`: an initial `snapshot` event delivers
-  full history immediately (a reload or a brand-new tab never starts from empty), and a `tick`
-  event pushes out on every genuine change thereafter — no client-side polling.
-- Sparklines are still hand-drawn inline SVG on the client; only *where the history comes from*
-  changed (the server, not a per-tab ring buffer).
-- Because polling happens server-to-server, MTPLX's CORS reflection is no longer relevant — the
-  browser only ever talks same-origin to this Node server.
-- `index.html`, `log.html`, and `detail.html` are light/dark aware (`prefers-color-scheme`) and
-  degrade gracefully when MTPLX is unreachable (dim + reconnect banner, last values retained) or
-  when the SSE connection itself drops (native `EventSource` auto-reconnect, no custom retry logic
-  needed) — `detail.html` opens its own `EventSource('/api/events')` too, same as the other two.
-  `history.html` is light/dark aware but holds no SSE connection at all — it's a fetch-on-load,
-  manual-refresh page, not a live one.
+  full state immediately, and a `tick` event pushes out on every genuine change thereafter — no
+  client-side polling.
+- Sparklines are hand-drawn inline SVG on the client; only *where the history comes from* is
+  server-side now, not a per-tab ring buffer.
+- Because scraping happens server-to-server, the browser only ever talks same-origin to this Node
+  server.
+- `index.html` is light/dark aware (`prefers-color-scheme`) and degrades gracefully when rapid-mlx
+  is unreachable (dim + reconnect banner, last values retained) or when the SSE connection itself
+  drops (native `EventSource` auto-reconnect, no custom retry logic needed). `history.html` is
+  light/dark aware but holds no SSE connection at all — it's a fetch-on-load, manual-refresh page.
+  `log.html`/`detail.html` hold no SSE connection either, in this phase, because there is nothing
+  for them to subscribe to.
 
-## Limitations (by design — it reads `/metrics`, nothing more)
+## Limitations (by design — it reads `/metrics`, nothing more, in this phase)
 
-- **Completed requests only.** A long generation appears when it *finishes*, not mid-flight.
-- **Prompt is a server-truncated preview** (180 chars of the last user message), and there is
-  **no assistant response body** in stock `/metrics` — this is a live pulse, not a full trace store.
-  The single-request detail page can show the full prompt + response *if* you run a patched MTPLX
-  with body capture enabled — see [`patches/`](./patches/README.md). Off by default; opt-in only.
-- **Caller attribution is approximate.** OpenAI-compatible clients report the same
-  `client_label`, so multiple apps hitting one server aren't cleanly distinguished.
-- For full prompt/response bodies, patch MTPLX for opt-in body capture ([`patches/`](./patches/README.md))
-  or put a logging proxy in front of the server. Tool-call *arguments* still aren't captured either way.
+- **No per-request history, yet.** rapid-mlx exposes no request id, no prompt preview, and no
+  transcript — not even for in-flight work. The live log and single-request detail pages are
+  explanatory placeholders until a capture proxy exists in the request path (Phase 2).
+- **Speculative decoding reads zero.** The MoE weights currently loaded carry no MTP head, so the
+  spec-decode card self-hides; it lights back up automatically if that changes.
+- **Prefill throughput is server-wide, not per-request.** `/v1/status.prompt_tps` is the only
+  signal rapid-mlx exposes for it.
+- **Multi-target is one target for now.** `RAPID_MLX_TARGETS` and the `target_id` columns already
+  support more than one backend; the selector UI and a second live target arrive in Phase 3.
 
 ---
 
@@ -210,5 +214,5 @@ as-is by `express.static`. Only `server/**/*.ts` goes through TypeScript.
 
 [MIT](./LICENSE) © 2026 Tyler Singletary
 
-Not affiliated with or endorsed by MTPLX — a community tool built against its public
-`/metrics` endpoint.
+Not affiliated with or endorsed by rapid-mlx — a community tool built against its public
+Prometheus `/metrics` endpoint.

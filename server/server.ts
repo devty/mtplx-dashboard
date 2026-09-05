@@ -35,7 +35,20 @@ app.get('/api/metrics', (_req, res) => {
 });
 
 /** Parses the shared from/to/buckets/names query shape. `buckets` is clamped
- *  because it sizes the GROUP BY output the client has to render. */
+ *  because it sizes the GROUP BY output the client has to render.
+ *
+ *  `names` accepts two shapes: a single comma-joined string (the
+ *  REQUEST_SERIES convention — `decode`/`ttft` never contain a comma) or
+ *  repeated `?names=a&names=b` params, which Express/qs collect into an
+ *  array. Gauge series names can carry more than one label and are NOT safe
+ *  to comma-join: promSeries.ts's seriesName() keeps every label but `model`
+ *  and `family`, so a series like
+ *  `suffix_decode_fallthrough_total{method=suffix,reason=batch_size}` has a
+ *  literal comma inside it. Percent-encoding that comma does not survive a
+ *  single joined query value either — Express decodes the whole value before
+ *  this function ever splits it, so an escaped internal comma and the
+ *  delimiter comma become indistinguishable. Repeated params sidestep this
+ *  entirely: each occurrence is decoded independently. */
 function parseRange(q: Record<string, unknown>, fallbackNames: string[]) {
   const int = (v: unknown, def: number): number => {
     const n = Number.parseInt(String(v ?? ''), 10);
@@ -44,8 +57,15 @@ function parseRange(q: Record<string, unknown>, fallbackNames: string[]) {
   const to = int(q.to, Date.now());
   const from = int(q.from, to - 3600000);
   const buckets = Math.min(2000, Math.max(1, int(q.buckets, 240)));
-  const raw = typeof q.names === 'string' ? q.names : '';
-  const names = raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : fallbackNames;
+
+  let names: string[];
+  if (Array.isArray(q.names)) {
+    names = q.names.map(v => String(v).trim()).filter(Boolean);
+  } else if (typeof q.names === 'string' && q.names) {
+    names = q.names.split(',').map(s => s.trim()).filter(Boolean);
+  } else {
+    names = fallbackNames;
+  }
   return { from, to, buckets, names };
 }
 

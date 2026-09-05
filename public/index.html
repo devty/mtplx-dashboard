@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230b0e14'/%3E%3Cpath d='M55 10 28 56h18l-5 34 31-48H52z' fill='%233b82f6'/%3E%3C/svg%3E">
-<title>MTPLX — inference metrics</title>
+<title>rapid-mlx — inference metrics</title>
 <style>
 /* ---------------------------------------------------------------- tokens */
 :root {
@@ -258,7 +258,7 @@ footer code { font: 11px ui-monospace, Menlo, monospace; }
 <div class="wrap">
 
   <header>
-    <div class="brand">MTPLX<small>inference metrics</small></div>
+    <div class="brand">rapid-mlx<small>inference metrics</small></div>
     <nav class="nav">
       <a href="index.html" class="active">Dashboard</a>
       <a href="log.html">Live log</a>
@@ -281,7 +281,7 @@ footer code { font: 11px ui-monospace, Menlo, monospace; }
     </div>
   </header>
 
-  <div id="banner"><b>Connection lost.</b> The dashboard server can't reach MTPLX — showing last data from <span id="banner-time">—</span>. Retrying automatically…</div>
+  <div id="banner"><b>Connection lost.</b> The dashboard server can't reach rapid-mlx — showing last data from <span id="banner-time">—</span>. Retrying automatically…</div>
 
   <main>
 
@@ -452,14 +452,14 @@ footer code { font: 11px ui-monospace, Menlo, monospace; }
 
   </main>
 
-  <footer>server-side poll of MTPLX <code>/metrics</code> · pushed live over SSE · history persists server-side (last <span id="f-ring">—</span> requests)</footer>
+  <footer>server-side scrape of rapid-mlx <code>/metrics</code> · pushed live over SSE · history persists server-side (last <span id="f-ring">—</span> requests)</footer>
 </div>
 
 <script>
 'use strict';
 /* ================================================================= config
    Data now arrives over SSE from this same-origin Node server, which owns
-   polling MTPLX server-side (see server/metricsPoller.ts) — no more ?server=
+   scraping rapid-mlx's Prometheus /metrics server-side (see server/promScraper.ts) — no ?server=
    override or per-tab polling here. */
 const CTX_MAX = 262144;
 const CTX_BUCKETS = 240; // spark resolution for non-live ranges
@@ -867,33 +867,48 @@ async function loadHistory() {
   const gen = ++historyGen; // this call's generation — setRange() bumps historyGen on every switch
   const to = Date.now(), from = to - rangeMs;
   try {
-    const r = await fetch(
-      `/api/history/series?names=decode,prefill,ttft,accept&from=${from}&to=${to}&buckets=${CTX_BUCKETS}`
-    );
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const j = await r.json();
+    /* Only decode/ttft are request-derived under rapid-mlx (server/db.ts
+       REQUEST_SERIES) — prefill and accept moved to gauges (spec §5.4:
+       /v1/status.prompt_tps is instantaneous, spec_decode_accept_ratio is
+       server-wide). Fetching all four from /api/history/series like the old
+       MTPLX-era code did gets prefill/accept rejected as unknown names,
+       which 400s the WHOLE request and blanks decode/ttft too. The accept
+       gauge's stored name carries its `method` label exactly like the live
+       SpecDecode card's sv() lookup below — see server/promSeries.ts. */
+    const gaugeParams = new URLSearchParams({ from: String(from), to: String(to), buckets: String(CTX_BUCKETS) });
+    gaugeParams.append('names', 'prompt_tps');
+    gaugeParams.append('names', 'spec_decode_accept_ratio{method=mtp}');
+    const [seriesRes, gaugeRes] = await Promise.all([
+      fetch(`/api/history/series?names=decode,ttft&from=${from}&to=${to}&buckets=${CTX_BUCKETS}`),
+      fetch(`/api/history/gauges?${gaugeParams.toString()}`),
+    ]);
+    if (!seriesRes.ok) throw new Error('HTTP ' + seriesRes.status);
+    if (!gaugeRes.ok) throw new Error('HTTP ' + gaugeRes.status);
+    const j = await seriesRes.json();
+    const g = await gaugeRes.json();
     /* A newer range was selected while this request was in flight — its data is
        for a window the user is no longer looking at. Drop it rather than
        painting it under a button that says something else. */
     if (gen !== historyGen) return;
     /* One slot per bucket across the whole window, not one slot per returned
        row — a bucket with no data must render as a gap, not as a seam
-       stitched to its neighbors. Placement uses j.bucketMs/j.from from the
-       RESPONSE so it matches exactly what the server bucketed. */
+       stitched to its neighbors. Placement uses the RESPONSE's own
+       from/bucketMs so it matches exactly what the server bucketed (both
+       requests were sent with identical from/to/buckets, so j and g agree). */
     const slots = Math.max(1, Math.ceil((j.to - j.from) / j.bucketMs));
-    const dense = pts => {
+    const dense = (pts, src) => {
       const out = new Array(slots).fill(null);
       for (const p of pts || []) {
-        const i = Math.floor((p.ts - j.from) / j.bucketMs);
+        const i = Math.floor((p.ts - src.from) / src.bucketMs);
         if (i >= 0 && i < slots) out[i] = p.avg;
       }
       return out;
     };
     historyRings = {
-      decode:  dense(j.series.decode),
-      prefill: dense(j.series.prefill),
-      ttft:    dense(j.series.ttft),
-      accept:  dense(j.series.accept),
+      decode:  dense(j.series.decode, j),
+      ttft:    dense(j.series.ttft, j),
+      prefill: dense(g.series.prompt_tps, g),
+      accept:  dense(g.series['spec_decode_accept_ratio{method=mtp}'], g),
     };
   } catch {
     if (gen !== historyGen) return;

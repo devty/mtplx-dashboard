@@ -4,23 +4,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A realtime dashboard for a local MTPLX inference server (MTP/speculative-decoding LLM inference
-on Apple Silicon). A small Node/TypeScript server (`server/`) polls MTPLX's `/metrics` endpoint
-itself on an interval and pushes updates to connected browsers over Server-Sent Events. The four
-pages remain plain, framework-free HTML/CSS/JS with everything inline:
+A realtime dashboard for a local rapid-mlx inference server (LLM inference
+on Apple Silicon, exposed as a standard Prometheus text-exposition `/metrics` endpoint). A small
+Node/TypeScript server (`server/`) scrapes that endpoint itself on an interval and pushes updates
+to connected browsers over Server-Sent Events. The four pages remain plain, framework-free
+HTML/CSS/JS with everything inline:
 
-- `public/index.html` — metrics dashboard (speculative-decoding hero stats, throughput, latency,
-  context, verify-time breakdown, KV cache, tool-call parse health)
-- `public/log.html` — live activity log (one row per completed request, expandable detail drawer)
-- `public/detail.html` — standalone single-request detail page, reached via a permalink from the
-  log's detail drawer
-- `public/history.html` — run history & comparison (per-run aggregates, config diff, gauge charts)
+- `public/index.html` — metrics dashboard (throughput + memory + queue-depth hero, latency,
+  context, prefix cache, structured-output/tool-call health, spec-decode as a self-hiding card)
+- `public/log.html` — per-request log. **Unavailable in this phase**: rapid-mlx exposes no
+  per-request identity anywhere (not even mid-flight — `/v1/status.requests` stays empty while
+  `num_running` is 1), so this page is a static explanatory panel, not a live feed. Returns with
+  the Phase 2 capture proxy (see the design doc under `docs/superpowers/specs/`).
+- `public/detail.html` — same unavailable state as `log.html`; was a permalink target for a log
+  row, which no longer exists to link from.
+- `public/history.html` — run history & comparison (per-run config diff, gauge charts discovered
+  from the scrape)
 
-`index.html`, `log.html`, and `detail.html` connect to the same `GET /api/events` SSE endpoint on
-this server and render off a shared `StatePayload` shape (see `server/types.ts`); `history.html`
-is fetch-on-load only and holds no SSE connection (see Connection/offline handling below). There
-is still no shared JS *file* between any of the four pages, so rendering/formatting logic (not
-data acquisition — see below) remains hand-duplicated across them.
+`index.html` connects to `GET /api/events` SSE and renders off a shared `StatePayload` shape (see
+`server/types.ts`). `log.html`/`detail.html` currently hold no SSE connection at all — there is
+nothing for them to subscribe to. `history.html` is fetch-on-load only and holds no SSE connection
+either (see Connection/offline handling below). There is still no shared JS *file* between any of
+the four pages, so rendering/formatting logic (not data acquisition — see below) remains
+hand-duplicated across them.
+
+**This phase (Phase 1 — scrape path) is single-target and read-only**: no capture proxy, no
+per-request data, one rapid-mlx backend. `server/targets.ts` and the `target_id` column already
+exist so Phase 3 (multi-target) is additive rather than a schema change.
 
 ## Running / testing
 
@@ -28,129 +38,163 @@ data acquisition — see below) remains hand-duplicated across them.
 npm install
 npm run dev              # tsx watch server/server.ts — auto-restarts on change
 # http://127.0.0.1:8123/              → dashboard
-# http://127.0.0.1:8123/log.html      → live log
 # http://127.0.0.1:8123/history.html  → run history & comparison
+# http://127.0.0.1:8123/log.html      → explains why the live log is unavailable this phase
+# http://127.0.0.1:8123/detail.html   → same, for the old permalink target
 
 npm run build && npm start   # production: compile once, run plain node
 npm run typecheck             # tsc --noEmit
-
-npm run mtplx:postupgrade            # check MTPLX install after an upgrade
-npm run mtplx:postupgrade -- --fix   # …and re-apply the transcript patch if it was reverted
 ```
 
-`mtplx:postupgrade` exists because `patches/mtplx-full-transcript-capture.patch` edits the
-*installed* mtplx package, so every MTPLX upgrade silently reverts it while the
-`MTPLX_DASHBOARD_CAPTURE_BODIES` env var (living in a launchd plist) survives — the server stays
-healthy and the detail page just quietly drops back to 180-char previews. See `patches/README.md`.
-
-`npm test` runs `node:test` unit tests for `server/db.ts` against a throwaway on-disk SQLite file
-in a temp directory — not `:memory:`, because an in-memory database is private to the connection
-that opened it and the tests assert through a second read connection. Everything else is still
-verified by loading the pages against a real MTPLX — there is no frontend test harness. The server
-polls a single configured MTPLX target via `MTPLX_URL` (default `http://127.0.0.1:8000`); see
-`.env.example` / README for the full list of env vars (`PORT`, `POLL_INTERVAL_MS`,
-`MTPLX_TIMEOUT_MS`, `RING_SIZE`, `LOG_BUFFER_SIZE`, `MAX_BACKOFF_MS`, `DB_PATH`, `PERSIST_ENABLED`,
-`RETENTION_DAYS`, `PRUNE_INTERVAL_MS`, `HEALTH_INTERVAL_MS`). There is no `?server=` query-param
-override anymore — polling happens once, server-side, not per browser tab.
+`npm test` runs `node:test` unit tests: `promParse.test.ts` (Prometheus text parsing against
+golden fixtures in `server/fixtures/`, including families that only appear after first traffic),
+`promSeries.test.ts` (series-name derivation, counter deltas, restart detection),
+`runTracker.test.ts` (run identity from `uptime_seconds`, including the derived-origin restart
+case), `targets.test.ts` (`RAPID_MLX_TARGETS` parsing), `promScraper.test.ts` (per-interval
+sparkline derivation, cumulative-vs-gauge classification), and `db.test.ts` (the SQLite
+persistence layer) — all against a throwaway on-disk SQLite file in a temp directory, not
+`:memory:`, because an in-memory database is private to the connection that opened it and the
+tests assert through a second read connection. There is no frontend test harness; verify page
+changes by loading them against a real rapid-mlx server. The server scrapes a single configured
+target via `RAPID_MLX_TARGETS` (default `qwen=http://127.0.0.1:8000:8010`); see `.env.example` for
+the full list of env vars.
 
 ## Architecture
 
 ### Server (`server/`)
-- `config.ts` — one frozen object reading `process.env` with typed defaults.
-- `types.ts` — `MetricsRecord`/`ToolParseCounters`/`MtplxMetricsResponse` (the shape MTPLX's
-  `/metrics` returns) and `StatePayload` (the shape this server emits to browsers — used
-  identically for the initial SSE `snapshot` and every later `tick`).
-- `metricsPoller.ts` — the core module. Polls `GET {MTPLX_URL}/metrics` via a recursive
-  `setTimeout` (not `setInterval`, so the delay can grow under failure and shrink back on
-  success — this is the retry/backoff mechanism, capped at `MAX_BACKOFF_MS`). Owns the
-  server-side ring buffers and log buffer (see below), the `sig()`-based change detection, and
-  `connected`/`lastOkAt`/`lastChangeAt` state. It no longer polls `/v1/models` itself — the model
-  string it reports in `getSnapshot()` comes from `healthPoller.getModel()`. Every first-seen
-  `request_id` is also mirrored into SQLite via `store.insertRequest()`, tagged with
-  `healthPoller.getCurrentRunId()`. Exports `start()`/`stop()`/`getSnapshot()`.
-- `db.ts` — all SQLite I/O behind a `Store` created by `createStore()`. Owns the v1 schema
-  (`run`/`request`/`gauge`) and the bucketed range queries and prune that run against it; every
-  call does a fresh `db.prepare(...)` rather than hoisting statements (at roughly one write per
-  second this is not worth the added complexity). Every method catches its own errors and
-  degrades rather than throwing — persistence must never be able to break the live dashboard.
-  Injected into the pollers by `server.ts`, not a global.
-- `healthPoller.ts` — low-frequency `/health` loop. Detects MTPLX restarts exactly via
-  `startup.pid` + `startup.started_at`, writes `run` rows with the full health JSON, samples the
-  request-less gauges, and owns the model string (which is why `metricsPoller` no longer polls
-  `/v1/models`).
+- `config.ts` — one frozen object reading `process.env` with typed defaults, including the parsed
+  `targets` array.
+- `targets.ts` — parses `RAPID_MLX_TARGETS` (`id=<upstreamUrl>[:<proxyPort>][|<label>]`, comma
+  separated) into `Target[]`. Phase 1 uses exactly one; the array shape is what Phase 3 extends
+  without a code change. `proxyPort` is parsed now but unused until the Phase 2 capture proxy.
+- `types.ts` — `RingBuffers` and `StatePayload` (the shape this server emits to browsers — used
+  identically for the initial SSE `snapshot` and every later `tick`; `upstreamOk` is always `null`
+  in this phase, since there is no capture proxy to report on).
+- `promParse.ts` — pure Prometheus text exposition parser: text in, `{name, labels, value}[]` out.
+  No I/O, no state. The metric family set is discovered here, never assumed.
+- `promSeries.ts` — `seriesName()` derives the stable DB key for a sample (labels sorted,
+  percent-encoded, `model`/`family` dropped — see the Data model section); `CounterState` turns
+  cumulative counters into per-interval deltas, returning `null` on first-sight or on a decrease
+  (a restart, never substituted with a fabricated value); `detectRestart()` is the
+  uptime-went-backwards half of run detection.
+- `runTracker.ts` — `RunTracker.observe()` is the other half of run detection: it derives
+  `started_at` from `now - uptime_seconds * 1000` **once**, at first observation and again only
+  when a restart is detected, then holds it stable (recomputing every scrape would wander the
+  origin by a few ms and mint a new `run` row roughly once a second against the unique index).
+  Restart is declared on either an uptime decrease *or* the derived origin landing more than 30s
+  after the last successful observation (catches a restart that happened entirely during a scrape
+  outage, where the naive decrease test sees nothing). Upserts `run` rows via `store.upsertRun()`.
+- `promScraper.ts` — the core poll loop (replaces the old MTPLX-era `metricsPoller.ts`, which is
+  deleted). Fetches `GET {target.upstreamUrl}/metrics` via a recursive `setTimeout` (so the delay
+  can grow under failure and shrink back on success — retry/backoff capped at `MAX_BACKOFF_MS`),
+  parses it, feeds `runTracker.observe()`, derives the four sparkline samples, pushes the
+  `rings.{decode,prefill,ttft,accept}` buffers (capped at `RING_SIZE`, **start empty on every
+  restart** — a Prometheus scrape has no rolling-window equivalent to MTPLX's `recent[]` to seed
+  from, and depth rebuilds live rather than being fabricated), and persists gauges on its own
+  slower cadence (see SQLite persistence below). Owns `scrapeOk`/`lastOkAt`/`lastChangeAt`.
+  Exports `start()`/`stop()`/`getSnapshot()`.
+- `healthPoller.ts` — repurposed low-frequency `/health` + `/v1/status` + `/v1/models` loop. No
+  longer owns run identity (moved to `runTracker.ts`, which has the exact `uptime_seconds`
+  signal) — what remains is caching the three JSON endpoints the scrape cannot supply:
+  `engine_type`, `prompt_tps` (the only prefill-rate signal that exists — instantaneous and
+  server-wide, no per-request equivalent), and `context_window`. Re-reads `/v1/models` every poll
+  rather than caching it once, because a weights swap without a dashboard restart would otherwise
+  bake the previous model's context window into every later `run` row.
+- `db.ts` — all SQLite I/O behind a `Store` created by `createStore()`. Owns the v2 schema
+  (`run`/`request`/`transcript`/`gauge`) and the bucketed range queries and prune that run against
+  it; every call does a fresh `db.prepare(...)` rather than hoisting statements. Every method
+  catches its own errors and degrades rather than throwing — persistence must never be able to
+  break the live dashboard. Injected into `promScraper`/`healthPoller` by `server.ts`, not a
+  global.
 - `sse.ts` — tracks connected `Response` objects in a `Set`, writes `snapshot`/`tick` SSE events,
-  and a 20s heartbeat comment so idle connections aren't reaped by any intermediary.
+  and a 20s heartbeat comment so idle connections aren't reaped by any intermediary. Mechanism
+  unchanged from the MTPLX era.
 - `server.ts` — Express app: serves `public/` statically, `GET /api/events` (SSE — sends one
-  `snapshot` on connect, then relies on `metricsPoller` to `broadcastTick()` on change),
+  `snapshot` on connect, then relies on `promScraper` to `broadcastTick()` on change),
   `GET /api/metrics` (plain JSON snapshot, debug/convenience only — no client code depends on it),
-  `GET /api/history/series` and `GET /api/history/gauges` (bucketed history reads off `db.ts`,
-  rejecting unknown series names in `/api/history/series` with HTTP 400 via `Object.hasOwn` —
-  deliberately not the `in` operator, which walks the prototype chain), `GET /api/history/runs`
-  and `GET /api/history/runs/:id` (run listing with per-run aggregates, and the only endpoint
-  that ever sends a run's full `/health` JSON), and graceful `SIGINT`/`SIGTERM` shutdown gated by
-  a `shuttingDown` flag so the startup promise chain
-  (`healthPoller.start().then(() => poller.start())`) can't start the metrics poller after
-  shutdown has already begun.
+  `GET /api/history/series` (request-derived series only — `decode`/`ttft`, the closed
+  `REQUEST_SERIES` allowlist, rejecting unknown names with HTTP 400 via `Object.hasOwn`
+  — deliberately not the `in` operator, which walks the prototype chain),
+  `GET /api/history/gauges` (any gauge series by name — safe because gauge names are bound as SQL
+  parameters, never interpolated), `GET /api/history/gauge-names` (discovery: the distinct series
+  actually persisted for a target, since the family set is not fixed — see Conventions),
+  `GET /api/history/runs` and `GET /api/history/runs/:id` (run listing with per-run aggregates,
+  the only endpoint that ever sends a run's full `/health`+`/v1/status`+`build_info` JSON), and
+  graceful `SIGINT`/`SIGTERM` shutdown. `parseRange()` accepts `names` as either a single
+  comma-joined string (safe for `REQUEST_SERIES`, whose two names never contain a comma) or
+  repeated `?names=` query params collected into an array by Express — required for gauge series,
+  whose names can carry more than one label and therefore a literal comma (see Conventions).
 
 ### Data model
-MTPLX's `/metrics` response (`MtplxMetricsResponse`) is unchanged upstream:
-```
-{ latest: {...}, recent: [...up to 32 past records...], tool_parse_counters: {...} }
-```
-`latest` is the most recent completed request; `recent` is MTPLX's own rolling window. Everything
-is keyed off *completed* requests — an in-flight generation is invisible until it finishes, since
-that's all `/metrics` exposes. The Node server is now the single poller and sole source of truth
-for `connected`/history — browsers never talk to MTPLX directly.
+rapid-mlx's `/metrics` is standard Prometheus text exposition — families, types (`counter` /
+`gauge` / `histogram`), labels, no request identity anywhere. This is fundamentally different from
+MTPLX's old `{ latest, recent[32], tool_parse_counters }` JSON shape: there is no "the most recent
+request" object to read fields off of, only current aggregate values and cumulative counters that
+must be differenced into per-interval rates. `/v1/status.requests` stays empty even while
+`num_running: 1` — there is no in-flight request identity to expose either. Everything the
+dashboard shows is either an instantaneous gauge, a rate derived from two consecutive scrapes of a
+counter, or a histogram bucket/sum/count triple.
 
 ### Server-side history buffers
-Since MTPLX only exposes the last ~32 records, `metricsPoller.ts` keeps its own longer-lived
-buffers so a fresh browser tab or reload gets deep history immediately via the SSE `snapshot`,
-not just MTPLX's last-32:
-- `rings.{decode,prefill,ttft,accept}` arrays, capped at `config.ringSize` (`RING_SIZE`, default
-  120), seeded from `data.recent` on the first successful poll (`seeded` flag in `pollOnce()`).
-- `logSeen` (a `Map` keyed by `request_id`) plus `logOrder` (newest-first array), capped at
-  `config.logBufferSize` (`LOG_BUFFER_SIZE`, default 300) via `ingestLog()`. `firstSeen` is
-  stamped once, server-side, the moment a `request_id` is first observed — globally, not per
-  browser tab — so a new tab shows historically-accurate arrival times instead of "just now".
+`promScraper.ts` keeps `rings.{decode,prefill,ttft,accept}` (capped at `RING_SIZE`, default 120)
+so a fresh browser tab gets some depth immediately via the SSE `snapshot` rather than starting
+from a single point. Unlike the MTPLX era, these are **not seeded from anything** — they start
+empty on every dashboard restart and rebuild live. Do not "fix" this by synthesizing points from
+counters; a fabricated history is worse than a short one.
 
-On the client, `public/log.html`'s `seen`/`order` are now just a local mirror of "what's already
-rendered" (so `render()` only inserts new DOM nodes and open detail-drawers survive) — the actual
-dedup/trim happens in `ingestLog()` server-side.
+There is no server-side log buffer in this phase — `log.html`/`detail.html` have no data source to
+buffer, and the old `logSeen`/`logOrder`/`ingestLog()` machinery was deleted along with
+`metricsPoller.ts`.
 
 ### SQLite persistence
-The in-memory ring/log buffers are still the live path; SQLite is the durable one. `request` holds
-one row per completed request (numbers plus cheap attribution text — never prompt/response
-bodies), `run` holds one row per detected MTPLX run with its `/health` config snapshot, and
-`gauge` holds only the series that have no owning request (`session_bank_*`, `active_requests`,
-`requests_completed`, `tool_parse_*`). `session_bank_bytes`/`session_bank_entries` sample
-`/health`'s `session_bank.total_nbytes`/`entries` (actual usage) — NOT `max_bytes`/`max_entries`
-(the configured ceiling, constant for the process lifetime). Getting this backwards is an easy
-mistake since the field names read plausibly either way; it happened once already (Phase 1) and
-produced a flat-line gauge history. Sparkline series are NOT stored as gauges — they are
-derived from `request` on read via `REQUEST_SERIES`, whose expressions mirror `sample()` exactly
-so live and historical values cannot drift. Writes use `INSERT OR IGNORE` on `request_id`:
-MTPLX's `recent[]` replays already-stored requests after a dashboard restart, and `OR REPLACE`
-would overwrite their correct `ts`. `queryRuns()` LEFT JOINs `request` onto `run` (never `INNER`)
-so a run with zero requests still appears with null aggregates rather than being dropped.
+Schema v2 (v1 was the MTPLX era; a version mismatch on open renames the old file aside to
+`data/history-v<N>-mtplx.db` rather than migrating it — MTPLX and rapid-mlx rows are not
+comparable on any axis that matters, and a migration would produce history that silently lies
+across the boundary). All three tables carry `target_id TEXT NOT NULL`, ready for Phase 3's second
+backend without a schema change.
+
+- `run` — one row per detected restart. Unique index `(target_id, started_at)`. Carries `version`
+  (from `build_info`), `kv_cache_dtype`, `turboquant_mode`, `spec_decode_method`, `engine_type`,
+  `context_window`, and the full `/health`+`/v1/status`+`build_info` JSON as `health`. The MTPLX-only
+  columns (`pid`, `runtime_mode`, `depth`, `verify_core`, `paged_kv_quantization`) are gone —
+  rapid-mlx has no equivalent.
+- `request` — narrowed to what a proxy can eventually observe plus what the engine can join onto
+  it (`request_id`, `run_id`, `ts`, token counts, `ttft_s`/`decode_tok_s`, `outcome`, `engine_joined`,
+  etc.). Empty in Phase 1 — there is no capture proxy yet, so `requestCount`/decode/ttft aggregates
+  on `history.html`'s run table read as zero/`—` until Phase 2.
+- `transcript` — new in this phase's schema, but unused until Phase 2 populates it (prompt/response
+  bodies, independently retained on `TRANSCRIPT_RETENTION_DAYS`). Exists now so the schema doesn't
+  need a second migration later.
+- `gauge` — holds every series with no owning request: nearly everything rapid-mlx exposes, since
+  almost nothing is currently request-scoped. `queryGauges()`/`gaugeNames()` treat names as opaque,
+  parameterized strings — never interpolated, unlike `REQUEST_SERIES`.
+
+Sparkline series are split across two sources now (spec section 5.4): `decode`/`ttft` remain
+request-derived via the closed `REQUEST_SERIES` allowlist (mirroring `promScraper.ts`'s
+`deriveSamples()` exactly so live and historical values cannot drift, though in Phase 1 there are
+no `request` rows to derive from either); `prefill`/`accept` moved to `gauge` because neither has a
+per-request source (`/v1/status.prompt_tps` is instantaneous and server-wide; `spec_decode_accept_ratio`
+is server-wide and labeled by `family`/`method`). `queryRuns()` LEFT JOINs `request` onto `run`
+(never `INNER`) so a run with zero requests still appears with null aggregates rather than being
+dropped — which, in Phase 1, is every run.
 
 ### Change detection
-`sig()` in `metricsPoller.ts` (session_id + elapsed + token counts + ttft) detects whether
-`latest` actually changed between polls. This now gates two things: whether to push into the ring
-buffers, and whether to broadcast an SSE `tick` at all — MTPLX being idle doesn't produce a flood
-of identical ticks once a second.
+`promScraper.ts` broadcasts an SSE `tick` only when the derived decode/ttft samples actually
+advance (gated on `requests_processed_total` moving between scrapes) or when `scrapeOk` flips —
+an idle server doesn't produce a flood of identical ticks once a second. This replaces the old
+`sig()` function that lived in the deleted `metricsPoller.ts`.
 
-### Rendering (unchanged from before the server migration)
+### Rendering
 No virtual DOM, no diffing library — each renderer function (`renderHero`, `renderThroughput`,
-`renderContext`, etc. in `index.html`; `buildRow`/`buildDetail` in `log.html`) does a full
-`innerHTML` rewrite of its own section from the latest metrics object, driven by `applyPayload()`
-(the function that turns an incoming SSE `snapshot`/`tick` payload into the same render calls the
-old per-page poll loop used to make). `log.html`'s feed is the exception: `render()` only inserts
-DOM nodes for `request_id`s not already present, so open detail-drawers and scroll position
-survive.
+`renderContext`, `renderCache`, `renderQueue`, `renderOutcomes`, `renderSpecDecode`, etc. in
+`index.html`) does a full `innerHTML` rewrite of its own section from the latest payload, driven by
+`applyPayload()` (the function that turns an incoming SSE `snapshot`/`tick` into the same render
+calls). `log.html`/`detail.html` have no renderers left — they are static explanatory panels with
+no script at all.
 
 ### Sparklines
-Hand-rolled inline SVG in `index.html` (`makeSpark()`) — no charting library. Each spark owns its
-own hover/tooltip/crosshair wiring and redraws on `resize` (debounced). Colors are read from CSS
+Hand-rolled inline SVG (`makeSpark()`) — no charting library. Each spark owns its own
+hover/tooltip/crosshair wiring and redraws on `resize` (debounced). Colors are read from CSS
 custom properties at render time via `css()` (a `getComputedStyle` helper), so dark/light mode
 just works without re-running JS.
 
@@ -159,53 +203,77 @@ CSS variables under `:root` define a light palette; a `@media (prefers-color-sch
 overrides the same variable names for dark mode. `index.html`, `log.html`, `detail.html`, and
 `history.html` all duplicate this token block — keep them in sync when adjusting the palette.
 Layout is a 12-column CSS grid of `.card` elements with `span` modifier classes (`.hero`, `.wide`,
-`.third`, `.half` in `index.html`; `history.html` only needs `.half`) and breakpoints at 1080px
-and 680px.
+`.third`, `.half` in `index.html`; `history.html` only needs plain `.card`) and breakpoints at
+1080px and 680px.
 
 ### Connection/offline handling
-Two distinct failure modes map onto the same `body.disconnected` class / `#banner` /
-`.dot.offline` UI on `index.html`, `log.html`, and `detail.html`:
-1. **MTPLX unreachable, Node server fine** — `metricsPoller.ts` flips `connected` false and
-   broadcasts a `tick` immediately (not waiting for backoff); `applyPayload()` on the client sets
-   `body.disconnected` from the payload.
-2. **The SSE connection itself drops** — no custom reconnect logic; native `EventSource`
-   auto-reconnect handles it. `es.onerror` flips `disconnected` locally in the meantime, and on
-   reconnect the server's `/api/events` handler sends a fresh `snapshot` which clears it again
-   once healthy.
+Connection state is two-dimensional per target, and the two are independent (spec section 7): a
+failed scrape says nothing about whether inference is serving, and vice versa.
+- `scrapeOk` — whether the last `/metrics` scrape succeeded. Drives `index.html`'s
+  `body.disconnected` class / `#banner` / `.dot.offline` UI, same mechanism as the MTPLX era:
+  `promScraper.ts` flips it and broadcasts a `tick` immediately (not waiting for backoff) on any
+  change, and `applyPayload()` on the client reacts to it.
+- `upstreamOk` — capture-proxy forward-path health. Always `null` in this phase; there is no proxy
+  yet. Phase 2 makes this real. Whatever renders it must not conflate "unknown" with "down."
+- The SSE connection itself dropping is unrelated to either: no custom reconnect logic, native
+  `EventSource` auto-reconnect handles it, and the server's fresh `snapshot` on reconnect clears
+  any client-side "disconnected" state once healthy.
 
-`history.html` participates in neither: it holds no SSE connection at all, so there is no
-`body.disconnected` state to manage there — a failed fetch just leaves its own affected section
-showing "no data" rather than the whole page degrading.
+`log.html`/`detail.html` hold no SSE connection in this phase, so neither dimension applies to them
+— they render one static state regardless of server health. `history.html` also holds no SSE
+connection; a failed fetch just leaves its own affected section showing "no data" rather than the
+whole page degrading.
 
 ## Conventions to preserve
 
-- The data-acquisition layer (polling, retry/backoff, ring/log buffers, change detection) is
-  genuinely shared now — it lives once in `server/metricsPoller.ts` for both pages. Don't
-  re-introduce per-page polling or duplicate that logic back into the HTML files.
+- The data-acquisition layer (scraping, retry/backoff, ring buffers, change detection, run
+  detection) lives once in `server/promScraper.ts` + `server/runTracker.ts` for the whole app.
+  Don't re-introduce per-page polling or duplicate that logic back into the HTML files.
 - Rendering/formatting code (formatters, `makeSpark`, CSS tokens) is still intentionally
   duplicated across `public/index.html`, `public/log.html`, `public/detail.html`, and
   `public/history.html`, not factored into a shared file — match that duplication rather than
   introducing a shared frontend module for it.
-- When adding a new metric field, mirror the existing pattern: add it to `MetricsRecord` in
-  `server/types.ts` if it needs typed access, a `fmt*` helper for display, a dedicated `#id`
-  element already present in the markup or added alongside similar ones, and a render function
-  that no-ops gracefully (`—`) when the field is `null`/`undefined`.
 - `StatePayload` (`server/types.ts`) is sent in full on every `snapshot`/`tick` — not diffed. Keep
-  it that way unless payload size actually becomes a problem; diffing is not worth the complexity
-  at this project's scale (broadcasts only happen on genuine change, not every poll tick).
+  it that way unless payload size actually becomes a problem.
 - All sparkline data in `index.html` flows through `renderSparks()`, which reads `activeRings()`
   (live `rings` vs `historyRings`, picked by whether `rangeMs` is set) and is the only call site of
   `sparks.decode/prefill/ttft/accept.render()`. Never call `sparks.*.render()` directly from a
-  render function or from `applyPayload()` — `applyPayload()` correctly calls `renderSparks()`
-  rather than rendering `rings` itself, and that indirection is load-bearing: a direct call bypasses
-  the range selector, so an incoming SSE `tick` would silently overwrite a user's selected
+  render function or from `applyPayload()` — that indirection is load-bearing: a direct call
+  bypasses the range selector, so an incoming SSE `tick` would silently overwrite a user's selected
   historical range with live ring data, with no error and nothing obviously wrong in review.
 - `history.html`'s `makeSpark()` is a deliberate fork of `index.html`'s, not a bug: it adds
   restart-marker overlays (dashed lines at each run's `startedAt`) that `index.html` has no use
   for. Don't try to reconcile the two copies into one — that's the shared-module refactor this
   project's duplication convention exists to avoid.
-- The run config diff on `history.html` is intentionally scoped to the six columns promoted onto
-  `run` (`model`, `runtime_mode`, `depth`, `verify_core`, `paged_kv_quantization`,
-  `context_window`) — never the full `/health` JSON. `profile.env` alone carries ~30
-  MTPLX-internal flags per run; a full diff would bury every real config change in noise from
-  fields nobody set on purpose.
+- The run config diff on `history.html` is intentionally scoped to the columns actually promoted
+  onto `run` (`model`, `version`, `kv_cache_dtype`, `turboquant_mode`, `spec_decode_method`,
+  `engine_type`, `context_window`) — never the full `/health` JSON. `profile.env` alone carries
+  ~30 rapid-mlx-internal flags per run; a full diff would bury every real config change in noise
+  from fields nobody set on purpose.
+- The metric family set is NOT fixed — 59 families on a cold server, 73 after first traffic, 80 on
+  the gemma backend. Gauge series names are discovered from the scrape and stored as data; never
+  hardcode a family list. `REQUEST_SERIES` stays a closed `Object.hasOwn` allowlist for the
+  opposite reason: those names are interpolated into SQL.
+- `run.started_at` is derived from `uptime_seconds` ONCE, at restart detection, and held stable.
+  Recomputing it per scrape wanders the origin by a few ms (uptime is float seconds, scrape timing
+  jitters) and the `UNIQUE(target_id, started_at)` index then mints a new run every second.
+- Counter series are stored as per-interval deltas, never cumulative totals, and a decrease means a
+  restart — persist null, never a negative or a raw total.
+- Gauges persist on `GAUGE_PERSIST_INTERVAL_MS`, not the poll interval, and unchanged series are
+  skipped. Writing ~74 series at 1 Hz is ~6.4M rows/day.
+- Sparkline renderers must tolerate a **missing element**: `makeSpark` returns an inert
+  `{ render() {} }` when its element is null, and `renderSparks()` guards its caption write. Cards
+  can be conditionally hidden (the spec-decode card self-hides while
+  `spec_decode_attempts_total{method=mtp}` is 0, which on this deployment is always), so a null
+  element is an expected permanent state, not a transient bug. Without this guard, a module-scope
+  throw in the single-file inline script kills the entire page — no renderers, no SSE wiring, every
+  field frozen at `—`, with nothing server-side able to observe it (the markup is served
+  perfectly).
+- Series names carry **labels**: `seriesName()` drops only `model` and `family`, so a series like
+  spec-decode's accept ratio is keyed `spec_decode_accept_ratio{method=mtp}`, not the bare
+  `spec_decode_accept_ratio`. Reading a bare name yields a permanent null that looks exactly like
+  "no data yet" rather than an error — check the exact labeled key before concluding a series has
+  no data. Relatedly: a gauge series name can itself contain a comma (a series with more than one
+  surviving label, e.g. `suffix_decode_fallthrough_total{method=suffix,reason=batch_size}`), so
+  never comma-join multiple gauge names into one query-string value — use repeated `?names=`
+  params instead (see `server.ts`'s `parseRange()`).

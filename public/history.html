@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230b0e14'/%3E%3Cpath d='M55 10 28 56h18l-5 34 31-48H52z' fill='%233b82f6'/%3E%3C/svg%3E">
-<title>MTPLX — run history</title>
+<title>rapid-mlx — run history</title>
 <style>
 /* ---------------------------------------------------------------- tokens (shared with dashboard) */
 :root {
@@ -113,7 +113,20 @@ h2 {
   text-transform: uppercase; color: var(--muted); margin-bottom: 2px;
 }
 .subtitle { font-size: 12px; color: var(--ink-2); margin-bottom: 12px; }
+.subtitle code { font: 11.5px ui-monospace, Menlo, monospace; }
 .mini-note { font-size: 11px; color: var(--muted); margin-top: 10px; }
+
+/* ---------------------------------------------------------------- gauge grid
+   The gauge series list is discovered from the scrape, not hardcoded (it
+   differs by backend and grows after first traffic — 59/73/80 across the
+   committed fixtures), so cards are generated at runtime, one per series
+   name returned by /api/history/gauge-names. */
+.gauge-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+.gauge-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 12px; background: var(--page); min-width: 0; }
+.gauge-card .gauge-name {
+  font-size: 10.5px; font-weight: 600; color: var(--ink-2);
+  font-family: ui-monospace, Menlo, monospace; overflow-wrap: anywhere; line-height: 1.4;
+}
 
 /* ---------------------------------------------------------------- sparklines */
 .spark { position: relative; height: 74px; margin-top: 10px; }
@@ -154,7 +167,7 @@ footer { margin-top: 22px; font-size: 11.5px; color: var(--muted); text-align: c
 <div class="wrap">
 
   <header>
-    <div class="brand">MTPLX<small>inference metrics</small></div>
+    <div class="brand">rapid-mlx<small>inference metrics</small></div>
     <nav class="nav">
       <a href="index.html">Dashboard</a>
       <a href="log.html">Live log</a>
@@ -171,7 +184,12 @@ footer { margin-top: 22px; font-size: 11.5px; color: var(--muted); text-align: c
 
     <section class="card">
       <h2>Runs</h2>
-      <div class="subtitle">Every detected MTPLX run, newest first. Check up to two to compare their config.</div>
+      <div class="subtitle">
+        Every detected rapid-mlx run (a restart, inferred from <code>rapid_mlx_uptime_seconds</code>
+        going backwards), newest first. Check up to two to compare their config. Decode/TTFT
+        aggregates and request counts are per-request data — they read empty until the Phase&nbsp;2
+        capture proxy is recording requests.
+      </div>
       <table>
         <thead>
           <tr>
@@ -179,17 +197,15 @@ footer { margin-top: 22px; font-size: 11.5px; color: var(--muted); text-align: c
             <th>Started</th>
             <th>Duration</th>
             <th>Model</th>
-            <th>Runtime mode</th>
-            <th>Depth</th>
+            <th>Version</th>
             <th>Requests</th>
             <th>Decode (avg / min–max)</th>
             <th>TTFT (avg / min–max)</th>
-            <th>Accept</th>
             <th></th>
           </tr>
         </thead>
         <tbody id="run-tbody">
-          <tr><td colspan="11" class="mini-note">loading…</td></tr>
+          <tr><td colspan="9" class="mini-note">loading…</td></tr>
         </tbody>
       </table>
     </section>
@@ -205,29 +221,15 @@ footer { margin-top: 22px; font-size: 11.5px; color: var(--muted); text-align: c
       </table>
     </section>
 
-    <section class="card half">
-      <h2>Session bank usage — bytes</h2>
-      <div class="spark" id="g-session_bank_bytes"></div>
-    </section>
-
-    <section class="card half">
-      <h2>Session bank usage — entries</h2>
-      <div class="spark" id="g-session_bank_entries"></div>
-    </section>
-
-    <section class="card half">
-      <h2>Active requests</h2>
-      <div class="spark" id="g-active_requests"></div>
-    </section>
-
-    <section class="card half">
-      <h2>Requests completed (cumulative)</h2>
-      <div class="spark" id="g-requests_completed"></div>
+    <section class="card">
+      <h2>Gauge history</h2>
+      <div class="subtitle" id="gauge-subtitle">Loading available series…</div>
+      <div class="gauge-grid" id="gauge-grid"></div>
     </section>
 
   </main>
 
-  <footer>run boundaries detected from MTPLX <code>/health</code> · dashed lines mark each run's start · no live updates on this page — use Refresh</footer>
+  <footer>run boundaries detected from a decrease in <code>rapid_mlx_uptime_seconds</code> · dashed lines mark each run's start · no live updates on this page — use Refresh</footer>
 </div>
 
 <script>
@@ -367,12 +369,14 @@ function makeSpark(el, opts) {
   return { render };
 }
 
-const gaugeSparks = {
-  session_bank_bytes:   makeSpark($('g-session_bank_bytes'),   { color: '--s1', format: v => fmtCompact(v) + ' B', zeroBase: true }),
-  session_bank_entries: makeSpark($('g-session_bank_entries'), { color: '--s2', format: v => fmtInt(v), zeroBase: true }),
-  active_requests:      makeSpark($('g-active_requests'),      { color: '--s3', format: v => fmtInt(v), zeroBase: true }),
-  requests_completed:   makeSpark($('g-requests_completed'),   { color: '--s4', format: v => fmtInt(v), zeroBase: true }),
-};
+/* Gauge cards are built at runtime from whatever /api/history/gauge-names
+   discovers (populated by buildGaugeCards() once that fetch resolves) — the
+   family set is NOT fixed (59 families on a cold server, 73 after first
+   traffic, 80 on the gemma backend), so this must never be a hardcoded list
+   of MTPLX-era names like session_bank_bytes. */
+const SPARK_COLORS = ['--s1', '--s2', '--s3', '--s4'];
+let gaugeSparks = {};
+let gaugeNamesLoaded = [];
 
 /* ================================================================= state */
 let runs = [];
@@ -380,12 +384,17 @@ let selected = []; // up to 2 run ids, FIFO eviction on a third check
 let lastGaugeJson = null;
 const configCache = {};
 
+/* The six-ish columns actually promoted onto a `run` row (spec section 5.1) —
+   never the full /health JSON, which carries dozens of internal flags that
+   would bury a real config change in noise. Field names match RunSummary in
+   server/db.ts exactly (camelCase, as returned by /api/history/runs). */
 const DIFF_FIELDS = [
   ['model', 'Model'],
-  ['runtimeMode', 'Runtime mode'],
-  ['depth', 'MTP depth'],
-  ['verifyCore', 'Verify core'],
-  ['pagedKvQuantization', 'Paged KV quant'],
+  ['version', 'Version'],
+  ['kvCacheDtype', 'KV cache dtype'],
+  ['turboquantMode', 'Turboquant mode'],
+  ['specDecodeMethod', 'Spec-decode method'],
+  ['engineType', 'Engine type'],
   ['contextWindow', 'Context window'],
 ];
 
@@ -393,7 +402,7 @@ function renderRunTable() {
   $('run-count').textContent = runs.length + (runs.length === 1 ? ' run' : ' runs');
   const tbody = $('run-tbody');
   if (!runs.length) {
-    tbody.innerHTML = `<tr><td colspan="11" class="mini-note">no runs recorded yet</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="mini-note">no runs recorded yet</td></tr>`;
     return;
   }
   tbody.innerHTML = runs.map(r => `
@@ -402,15 +411,13 @@ function renderRunTable() {
       <td>${fmtStart(r.startedAt)}</td>
       <td>${fmtDuration(r.startedAt, r.endedAt)}</td>
       <td>${esc(r.model) || '—'}</td>
-      <td>${esc(r.runtimeMode) || '—'}</td>
-      <td>${r.depth ?? '—'}</td>
+      <td>${esc(r.version) || '—'}</td>
       <td>${fmtInt(r.requestCount)}</td>
       <td>${fmtAggRange(r.decode, 1)}</td>
       <td>${fmtAggRange(r.ttft, 2)}</td>
-      <td>${r.accept && r.accept.avg != null ? fmt(r.accept.avg * 100, 1) + '%' : '—'}</td>
       <td><button type="button" class="cfg-toggle" data-run-id="${r.id}">config</button></td>
     </tr>
-    <tr class="cfg-row" data-run-id="${r.id}" style="display:none"><td colspan="11"><pre class="cfg-pre"></pre></td></tr>
+    <tr class="cfg-row" data-run-id="${r.id}" style="display:none"><td colspan="9"><pre class="cfg-pre"></pre></td></tr>
   `).join('');
 }
 
@@ -478,6 +485,49 @@ $('run-tbody').addEventListener('click', async e => {
   }
 });
 
+/* Builds one card + spark per discovered gauge series name (see the
+   gaugeSparks comment above) and refreshes the subtitle. Called once at load
+   and again on Refresh, since the series set can grow after first traffic. */
+function buildGaugeCards() {
+  const grid = $('gauge-grid');
+  grid.innerHTML = '';
+  gaugeSparks = {};
+  if (!gaugeNamesLoaded.length) {
+    $('gauge-subtitle').textContent = 'No gauge history recorded yet for this target.';
+    return;
+  }
+  $('gauge-subtitle').textContent =
+    `${gaugeNamesLoaded.length} series discovered from the scrape — engine/health gauges only. `
+    + 'Per-request series (decode, TTFT) return with the Phase 2 capture proxy. '
+    + "Dashed lines mark each run's start.";
+  gaugeNamesLoaded.forEach((name, i) => {
+    const card = document.createElement('div');
+    card.className = 'gauge-card';
+    const sparkEl = document.createElement('div');
+    sparkEl.className = 'spark';
+    card.innerHTML = `<div class="gauge-name">${esc(name)}</div>`;
+    card.appendChild(sparkEl);
+    grid.appendChild(card);
+    gaugeSparks[name] = makeSpark(sparkEl, {
+      color: SPARK_COLORS[i % SPARK_COLORS.length],
+      format: v => fmtCompact(v),
+      zeroBase: true,
+    });
+  });
+}
+
+async function loadGaugeNames() {
+  try {
+    const r = await fetch('/api/history/gauge-names');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    gaugeNamesLoaded = (j.names || []).slice().sort();
+  } catch {
+    gaugeNamesLoaded = [];
+  }
+  buildGaugeCards();
+}
+
 /* The one place that redraws the gauge charts from whatever was last fetched
    — mirrors index.html's renderSparks()/activeRings() split so resize can
    re-render locally instead of re-fetching. */
@@ -507,12 +557,23 @@ function renderGauges() {
 }
 
 async function loadGauges() {
-  if (!runs.length) { lastGaugeJson = null; renderGauges(); return; }
-  const names = Object.keys(gaugeSparks);
+  if (!runs.length || !gaugeNamesLoaded.length) { lastGaugeJson = null; renderGauges(); return; }
   const from = runs[runs.length - 1].startedAt;
   const to = Date.now();
+  /* Repeated `names` params, not a comma-joined single param: a gauge series
+     name can itself legitimately contain a comma (e.g.
+     suffix_decode_fallthrough_total{method=suffix,reason=batch_size} keeps
+     both labels — see server/promSeries.ts). URLSearchParams percent-encodes
+     each value independently, so an embedded comma survives; joining with a
+     literal ',' delimiter would be indistinguishable from that comma once
+     the whole query string is decoded. */
+  const params = new URLSearchParams();
+  gaugeNamesLoaded.forEach(n => params.append('names', n));
+  params.set('from', String(from));
+  params.set('to', String(to));
+  params.set('buckets', String(GAUGE_BUCKETS));
   try {
-    const r = await fetch(`/api/history/gauges?names=${names.join(',')}&from=${from}&to=${to}&buckets=${GAUGE_BUCKETS}`);
+    const r = await fetch(`/api/history/gauges?${params.toString()}`);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     lastGaugeJson = await r.json();
   } catch {
@@ -535,11 +596,16 @@ async function loadRuns() {
   await loadGauges();
 }
 
+async function refreshAll() {
+  await loadGaugeNames(); // the series set can grow after first traffic
+  await loadRuns();
+}
+
 $('refresh-btn').addEventListener('click', async () => {
   const btn = $('refresh-btn');
   btn.disabled = true;
   btn.textContent = 'Refreshing…';
-  await loadRuns();
+  await refreshAll();
   btn.disabled = false;
   btn.textContent = 'Refresh';
 });
@@ -551,7 +617,7 @@ window.addEventListener('resize', () => {
   rz = setTimeout(renderGauges, 150);
 });
 
-loadRuns();
+refreshAll();
 </script>
 </body>
 </html>

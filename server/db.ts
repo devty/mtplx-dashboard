@@ -1,8 +1,47 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { DreamRunRecord } from './dreamParse';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
+
+export type DreamCommitSource = 'log' | 'git' | 'both' | 'none' | 'unavailable';
+export type DreamNightStatus = 'ok' | 'warned' | 'truncated' | 'missed' | 'unknown';
+
+export interface DreamNightRow {
+  date: string;
+  expectedAt: number;
+  runId: number | null;
+  status: DreamNightStatus;
+  startedAt: number | null;
+  committedSha: string | null;
+  commitSource: DreamCommitSource | null;
+}
+
+export interface DreamPhaseRow {
+  sourceId: string | null;
+  attribution: string;
+  phase: string;
+  mark: string;
+  text: string;
+  failureCount: number;
+  failuresJson: string | null;
+}
+
+export interface DreamNightDetail {
+  night: DreamNightRow;
+  run: {
+    id: number;
+    startedAt: number;
+    endedAt: number | null;
+    exitCode: number | null;
+    globalPassRc: number | null;
+    termination: string;
+    committedSha: string | null;
+    commitSource: DreamCommitSource;
+  } | null;
+  phases: DreamPhaseRow[];
+}
 
 /** Governs only the TOLERANT (nearest-match) path in upsertRun — the one
  *  gated on `opts.adopt` — for two derived origins that are close but not
@@ -152,6 +191,12 @@ export interface Store {
   querySeries(targetId: string, names: string[], from: number, to: number, buckets: number): SeriesResult;
   queryGauges(targetId: string, names: string[], from: number, to: number, buckets: number): SeriesResult;
   prune(now: number): void;
+  insertDreamRun(run: DreamRunRecord, commitFromGit: string | null, commitSource: DreamCommitSource): number | null;
+  queryDreamNights(limit: number): DreamNightRow[];
+  getDreamNight(date: string): DreamNightDetail | null;
+  upsertDreamNight(date: string, expectedAt: number, runId: number | null, status: DreamNightStatus): void;
+  dreamIngestOffset(): number;
+  setDreamIngestOffset(offset: number): void;
   close(): void;
 }
 
@@ -215,6 +260,53 @@ const DDL = `
   );
   CREATE INDEX IF NOT EXISTS gauge_target_series_ts ON gauge(target_id, series, ts);
   CREATE INDEX IF NOT EXISTS gauge_ts ON gauge(ts);
+
+  CREATE TABLE IF NOT EXISTS dream_run (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at      INTEGER NOT NULL,
+    ended_at        INTEGER,
+    exit_code       INTEGER,
+    global_pass_rc  INTEGER,
+    termination     TEXT    NOT NULL,
+    committed_sha   TEXT,
+    commit_source   TEXT    NOT NULL,
+    UNIQUE(started_at)
+  );
+
+  CREATE TABLE IF NOT EXISTS dream_source_cycle (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id       INTEGER NOT NULL REFERENCES dream_run(id) ON DELETE CASCADE,
+    ordinal      INTEGER NOT NULL,
+    duration_s   REAL    NOT NULL,
+    source_id    TEXT,
+    attribution  TEXT    NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS dream_cycle_run ON dream_source_cycle(run_id);
+
+  CREATE TABLE IF NOT EXISTS dream_phase (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id        INTEGER NOT NULL REFERENCES dream_run(id) ON DELETE CASCADE,
+    cycle_id      INTEGER REFERENCES dream_source_cycle(id) ON DELETE CASCADE,
+    source_id     TEXT,
+    phase         TEXT    NOT NULL,
+    mark          TEXT    NOT NULL,
+    raw_text      TEXT    NOT NULL,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    failures_json TEXT
+  );
+  CREATE INDEX IF NOT EXISTS dream_phase_run ON dream_phase(run_id);
+
+  CREATE TABLE IF NOT EXISTS dream_night (
+    date        TEXT    PRIMARY KEY,
+    expected_at INTEGER NOT NULL,
+    run_id      INTEGER REFERENCES dream_run(id) ON DELETE SET NULL,
+    status      TEXT    NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS dream_ingest (
+    id     INTEGER PRIMARY KEY CHECK (id = 1),
+    offset INTEGER NOT NULL
+  );
 `;
 
 /* node:sqlite accepts only number | string | bigint | null | Uint8Array as bind
@@ -350,10 +442,13 @@ class SqliteStore implements Store {
        would let an orphaned sidecar — left by a crash, or by deleting an
        archive's .db but not its companions — be silently overwritten by the
        sidecar rename below, which is the same clobber bug one level down. */
+    /* The archive name records which schema wrote it, not which product — v1
+       was MTPLX-era but v2 is already rapid-mlx, so a hardcoded -mtplx suffix
+       would mislabel every future set-aside. */
     const taken = (p: string): boolean =>
       fs.existsSync(p) || fs.existsSync(p + '-wal') || fs.existsSync(p + '-shm');
-    let aside = `${base}-v${version}-mtplx.db`;
-    for (let n = 2; taken(aside); n++) aside = `${base}-v${version}-mtplx.${n}.db`;
+    let aside = `${base}-v${version}.db`;
+    for (let n = 2; taken(aside); n++) aside = `${base}-v${version}.${n}.db`;
     fs.renameSync(file, aside);
     for (const suffix of ['-wal', '-shm']) {
       if (fs.existsSync(file + suffix)) fs.renameSync(file + suffix, aside + suffix);
@@ -676,6 +771,201 @@ class SqliteStore implements Store {
       this.db.prepare('DELETE FROM run WHERE ended_at IS NOT NULL AND ended_at < ?').run(cutoff);
     } catch (err) {
       this.fail('prune', err);
+    }
+  }
+
+  insertDreamRun(
+    run: DreamRunRecord,
+    commitFromGit: string | null,
+    commitSource: DreamCommitSource
+  ): number | null {
+    if (!this.db) return null;
+    try {
+      const shaFromLog = run.committedShas.get('default') ?? null;
+      const sha = shaFromLog ?? commitFromGit;
+      const info = this.db
+        .prepare(
+          `INSERT INTO dream_run
+             (started_at, ended_at, exit_code, global_pass_rc, termination,
+              committed_sha, commit_source)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(started_at) DO UPDATE SET
+             ended_at = excluded.ended_at,
+             exit_code = excluded.exit_code,
+             global_pass_rc = excluded.global_pass_rc,
+             termination = excluded.termination,
+             committed_sha = excluded.committed_sha,
+             commit_source = excluded.commit_source
+           RETURNING id`
+        )
+        .get(
+          run.startedAt,
+          run.endedAt,
+          run.exitCode,
+          run.globalPassRc,
+          run.termination,
+          sha,
+          commitSource
+        ) as { id: number } | undefined;
+      if (!info) return null;
+      const runId = info.id;
+
+      /* Re-ingesting a run that was `running` last pass must not double its
+         rows, so children are replaced wholesale. */
+      this.db.prepare('DELETE FROM dream_phase WHERE run_id = ?').run(runId);
+      this.db.prepare('DELETE FROM dream_source_cycle WHERE run_id = ?').run(runId);
+
+      const insCycle = this.db.prepare(
+        `INSERT INTO dream_source_cycle (run_id, ordinal, duration_s, source_id, attribution)
+         VALUES (?, ?, ?, ?, ?) RETURNING id`
+      );
+      const insPhase = this.db.prepare(
+        `INSERT INTO dream_phase
+           (run_id, cycle_id, source_id, phase, mark, raw_text, failure_count, failures_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+
+      for (const cycle of run.cycles) {
+        const row = insCycle.get(
+          runId,
+          cycle.ordinal,
+          cycle.durationS,
+          cycle.sourceId,
+          cycle.attribution
+        ) as { id: number };
+        for (const p of cycle.phases) {
+          insPhase.run(
+            runId,
+            row.id,
+            cycle.sourceId,
+            p.phase,
+            p.mark,
+            p.text,
+            p.failures.length,
+            p.failures.length ? JSON.stringify(p.failures) : null
+          );
+        }
+      }
+      return runId;
+    } catch (err) {
+      this.fail('insertDreamRun', err);
+      return null;
+    }
+  }
+
+  upsertDreamNight(
+    date: string,
+    expectedAt: number,
+    runId: number | null,
+    status: DreamNightStatus
+  ): void {
+    if (!this.db) return;
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO dream_night (date, expected_at, run_id, status)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(date) DO UPDATE SET
+             expected_at = excluded.expected_at,
+             run_id = excluded.run_id,
+             status = excluded.status`
+        )
+        .run(date, expectedAt, runId, status);
+    } catch (err) {
+      this.fail('upsertDreamNight', err);
+    }
+  }
+
+  queryDreamNights(limit: number): DreamNightRow[] {
+    if (!this.db) return [];
+    try {
+      return this.db
+        .prepare(
+          `SELECT n.date, n.expected_at AS expectedAt, n.run_id AS runId, n.status,
+                  r.started_at AS startedAt, r.committed_sha AS committedSha,
+                  r.commit_source AS commitSource
+             FROM dream_night n
+             LEFT JOIN dream_run r ON r.id = n.run_id
+            ORDER BY n.date DESC
+            LIMIT ?`
+        )
+        .all(limit) as unknown as DreamNightRow[];
+    } catch (err) {
+      this.fail('queryDreamNights', err);
+      return [];
+    }
+  }
+
+  getDreamNight(date: string): DreamNightDetail | null {
+    if (!this.db) return null;
+    try {
+      const night = this.db
+        .prepare(
+          `SELECT n.date, n.expected_at AS expectedAt, n.run_id AS runId, n.status,
+                  r.started_at AS startedAt, r.committed_sha AS committedSha,
+                  r.commit_source AS commitSource
+             FROM dream_night n
+             LEFT JOIN dream_run r ON r.id = n.run_id
+            WHERE n.date = ?`
+        )
+        .get(date) as DreamNightRow | undefined;
+      if (!night) return null;
+
+      const run = night.runId
+        ? (this.db
+            .prepare(
+              `SELECT id, started_at AS startedAt, ended_at AS endedAt,
+                      exit_code AS exitCode, global_pass_rc AS globalPassRc,
+                      termination, committed_sha AS committedSha,
+                      commit_source AS commitSource
+                 FROM dream_run WHERE id = ?`
+            )
+            .get(night.runId) as DreamNightDetail['run'])
+        : null;
+
+      const phases = night.runId
+        ? (this.db
+            .prepare(
+              `SELECT source_id AS sourceId, phase, mark, raw_text AS text,
+                      failure_count AS failureCount, failures_json AS failuresJson,
+                      (SELECT attribution FROM dream_source_cycle c WHERE c.id = p.cycle_id)
+                        AS attribution
+                 FROM dream_phase p WHERE p.run_id = ? ORDER BY p.id`
+            )
+            .all(night.runId) as unknown as DreamPhaseRow[])
+        : [];
+
+      return { night, run: run ?? null, phases };
+    } catch (err) {
+      this.fail('getDreamNight', err);
+      return null;
+    }
+  }
+
+  dreamIngestOffset(): number {
+    if (!this.db) return 0;
+    try {
+      const row = this.db.prepare('SELECT offset FROM dream_ingest WHERE id = 1').get() as
+        | { offset: number }
+        | undefined;
+      return row?.offset ?? 0;
+    } catch (err) {
+      this.fail('dreamIngestOffset', err);
+      return 0;
+    }
+  }
+
+  setDreamIngestOffset(offset: number): void {
+    if (!this.db) return;
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO dream_ingest (id, offset) VALUES (1, ?)
+           ON CONFLICT(id) DO UPDATE SET offset = excluded.offset`
+        )
+        .run(offset);
+    } catch (err) {
+      this.fail('setDreamIngestOffset', err);
     }
   }
 

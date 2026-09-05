@@ -142,7 +142,14 @@ app.get('/api/dream/nights/:date', (req, res) => {
     res.status(400).json({ error: 'date must be YYYY-MM-DD' });
     return;
   }
-  const detail = dream.night(req.params.date);
+  const { detail, status } = dream.night(req.params.date);
+  if (!status.ok) {
+    /* Ingest itself failed (unreadable log, etc.) — this is "couldn't check",
+       not "no such night". A 404 here would tell a caller the night never
+       happened when in fact nothing was checked at all. */
+    res.status(503).json({ error: status.error });
+    return;
+  }
   if (!detail) {
     res.status(404).json({ error: 'no such night' });
     return;

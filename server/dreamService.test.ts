@@ -57,7 +57,23 @@ test('a broken log degrades to an error payload, never throws', () => {
 
 test('night detail returns null for an unknown date', () => {
   const { store, env } = harness();
-  assert.equal(createDreamService(store, env).night('1999-01-01'), null);
+  const result = createDreamService(store, env).night('1999-01-01');
+  assert.equal(result.detail, null);
+  assert.equal(result.status.ok, true);
+  store.close();
+});
+
+/* Mirror of "a broken log degrades to an error payload, never throws" above,
+   but for night() — the gap this fix closes. Before this fix, night() threw
+   away the ingest status and returned bare null on both "no such night" and
+   "ingest failed", so a caller (and the route) could not tell them apart. */
+test('night() under a broken log reports the failure, not a bare null', () => {
+  const { store, env } = harness();
+  const svc = createDreamService(store, { ...env, GBRAIN_LOG_PATH: '/nonexistent/x.log' });
+  const result = svc.night('2026-09-05');
+  assert.equal(result.status.ok, false);
+  assert.ok(result.status.error);
+  assert.equal(result.detail, null);
   store.close();
 });
 

@@ -18,9 +18,18 @@ export interface DreamNightsPayload {
   };
 }
 
+export interface DreamNightResult {
+  /** null both when ingest failed (status.ok === false — check status.error
+   *  before trusting this) and when ingest succeeded but the date genuinely
+   *  has no run. The route tells these apart via `status.ok`, never by the
+   *  presence of `detail` alone. */
+  detail: DreamNightDetail | null;
+  status: DreamNightsPayload['status'];
+}
+
 export interface DreamService {
   nights(limit: number): DreamNightsPayload;
-  night(date: string): DreamNightDetail | null;
+  night(date: string): DreamNightResult;
 }
 
 export function createDreamService(
@@ -64,9 +73,21 @@ export function createDreamService(
         },
       };
     },
-    night(date: string): DreamNightDetail | null {
-      refresh();
-      return store.getDreamNight(date);
+    night(date: string): DreamNightResult {
+      const res = refresh();
+      return {
+        /* Mirrors nights(): don't query the store on a failed ingest. The
+           store's data isn't "wrong" in that case, but there is no reason to
+           trust it as a positive answer when the thing that's supposed to
+           keep it current couldn't run. */
+        detail: res.ok ? store.getDreamNight(date) : null,
+        status: {
+          ok: res.ok,
+          error: res.error,
+          scheduleKnown: res.scheduleKnown,
+          unrecognisedCount: res.unrecognisedCount,
+        },
+      };
     },
   };
 }

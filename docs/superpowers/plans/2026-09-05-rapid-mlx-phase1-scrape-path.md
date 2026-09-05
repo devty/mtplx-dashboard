@@ -1832,27 +1832,31 @@ async function fetchJson(url: string): Promise<unknown> {
 async function pollOnce(): Promise<void> {
   const base = target?.upstreamUrl;
   if (base) {
-    /* Settled, not raced: /v1/status failing must not blank out a good
-       /health, and neither is worth a retry at this cadence. */
-    const [h, s] = await Promise.allSettled([
+    /* Settled, not raced: any one endpoint failing must not blank out the
+       others, and none is worth a retry at this cadence.
+
+       /v1/models is re-read every poll rather than cached once. It describes
+       the loaded weights, which cannot change while the INFERENCE process
+       lives — but this poller outlives that process, and it no longer tracks
+       run identity (that moved to runTracker). Caching once therefore means
+       "for the dashboard's lifetime": swap weights without restarting the
+       dashboard and every later run row is persisted carrying the previous
+       model's context window. Not stale — wrong, and baked into the history
+       history.html diffs across runs. One extra localhost request per
+       healthIntervalMs is a much better trade than a cache with no
+       invalidation signal. */
+    const [h, s, m] = await Promise.allSettled([
       fetchJson(`${base}/health`),
       fetchJson(`${base}/v1/status`),
+      fetchJson(`${base}/v1/models`),
     ]);
     if (h.status === 'fulfilled') health = h.value;
     if (s.status === 'fulfilled') status = s.value;
-
-    /* context_window belongs to the loaded weights, so it is fetched once and
-       then only re-fetched if it is still unknown. */
-    if (contextWindow === null) {
-      try {
-        const models = (await fetchJson(`${base}/v1/models`)) as {
-          data?: { context_window?: unknown }[];
-        };
-        const cw = models?.data?.[0]?.context_window;
-        if (typeof cw === 'number' && Number.isFinite(cw)) contextWindow = cw;
-      } catch {
-        /* absent until the server answers; harmless */
-      }
+    /* A failed read keeps the last known value rather than nulling it — a
+       transient blip should not erase a good answer. */
+    if (m.status === 'fulfilled') {
+      const cw = (m.value as { data?: { context_window?: unknown }[] })?.data?.[0]?.context_window;
+      if (typeof cw === 'number' && Number.isFinite(cw)) contextWindow = cw;
     }
   }
   if (!stopped) timer = setTimeout(() => void pollOnce(), config.healthIntervalMs);

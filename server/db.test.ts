@@ -4,9 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { createStore, SCHEMA_VERSION } from './db';
-import type { RunInfo, RunRow } from './db';
-import type { MetricsRecord } from './types';
+import { createStore, SCHEMA_VERSION, REQUEST_SERIES } from './db';
+import type { RunInfo, RunRow, RunDetail, RequestRow } from './db';
+
+const DAY = 86_400_000;
 
 /** Creates a Store backed by a throwaway file, plus an independent read
  *  connection for assertions. A second connection is why this uses a temp file
@@ -14,15 +15,25 @@ import type { MetricsRecord } from './types';
  *  that opened it, so a reader would see an empty schema. WAL lets both
  *  connections coexist. `read` opens read-write because a strictly read-only
  *  connection cannot create the -shm file WAL needs. */
-function tmpStore(retentionDays = 30) {
+function tmpStore(retentionDays = 30, transcriptRetentionDays = 7) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
   const file = path.join(dir, 'history.db');
-  const store = createStore({ path: file, enabled: true, retentionDays });
-
+  const store = createStore({
+    path: file,
+    enabled: true,
+    retentionDays,
+    transcriptRetentionDays,
+  });
+  /* node:sqlite's .all() returns null-prototype row objects; this file imports
+     'node:assert/strict', where deepEqual is deepStrictEqual, which fails on a
+     prototype mismatch alone even when every field matches. Spreading into a
+     plain object strips the null prototype without touching the values. */
   const read = <T = Record<string, unknown>>(sql: string): T[] => {
     const db = new DatabaseSync(file);
     try {
-      return db.prepare(sql).all() as unknown as T[];
+      return (db.prepare(sql).all() as unknown as Record<string, unknown>[]).map(
+        r => ({ ...r })
+      ) as T[];
     } finally {
       db.close();
     }
@@ -34,26 +45,164 @@ function tmpStore(retentionDays = 30) {
   return { store, read, file, dir, cleanup };
 }
 
-test('creates the schema and stamps the version', () => {
-  const { store, read, cleanup } = tmpStore();
+function runInfo(targetId: string, startedAt: number, over: Partial<RunInfo> = {}): RunInfo {
+  return {
+    targetId,
+    startedAt,
+    model: 'test-model',
+    version: '1.0.0',
+    kvCacheDtype: 'bf16',
+    turboquantMode: 'off',
+    specDecodeMethod: 'none',
+    engineType: 'mlx',
+    contextWindow: 98304,
+    health: JSON.stringify({ ok: true }),
+    ...over,
+  };
+}
+
+const RUNS = 'SELECT * FROM run ORDER BY id';
+const REQUESTS = 'SELECT * FROM request ORDER BY ts';
+
+const REQ: RequestRow = {
+  requestId: 'req-1',
+  targetId: 'qwen',
+  runId: null,
+  ts: 1_700_000_002_000,
+  model: 'rapid-mlx-qwen3',
+  promptTokens: 436,
+  completionTokens: 9,
+  ttftS: 1.06,
+  requestElapsedS: 1.26,
+  decodeTokS: 43.8,
+  clientLabel: 'opencode',
+  toolCallCount: 0,
+  userPreview: 'hello there',
+  outcome: 'ok',
+  statusCode: 200,
+  streamed: true,
+  finishReason: 'stop',
+  engineJoined: true,
+};
+
+/* ---------------------------------------------------------------------- */
+/* Schema / versioning                                                    */
+/* ---------------------------------------------------------------------- */
+
+test('creates the schema successfully', () => {
+  const { store, cleanup } = tmpStore();
   assert.equal(store.status().enabled, true);
   assert.equal(store.status().ok, true);
   assert.equal(store.status().lastError, null);
+  cleanup();
+});
 
+test('v2 schema has the transcript table', () => {
+  const { read, cleanup } = tmpStore();
   const tables = read<{ name: string }>(
     `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`
   ).map(r => r.name);
-  assert.deepEqual(tables, ['gauge', 'request', 'run']);
-
+  assert.deepEqual(tables, ['gauge', 'request', 'run', 'transcript']);
   const [{ user_version }] = read<{ user_version: number }>('PRAGMA user_version');
-  assert.equal(user_version, SCHEMA_VERSION);
+  assert.equal(user_version, 2);
+  cleanup();
+});
+
+test('every time-series table carries target_id', () => {
+  const { read, cleanup } = tmpStore();
+  for (const t of ['run', 'request', 'gauge']) {
+    const cols = read<{ name: string }>(`PRAGMA table_info(${t})`).map(c => c.name);
+    assert.ok(cols.includes('target_id'), `${t} is missing target_id`);
+  }
+  cleanup();
+});
+
+test('run drops the MTPLX-only columns and gains the rapid-mlx ones', () => {
+  const { read, cleanup } = tmpStore();
+  const cols = read<{ name: string }>('PRAGMA table_info(run)').map(c => c.name);
+  for (const gone of ['pid', 'runtime_mode', 'generation_mode', 'depth', 'verify_core', 'paged_kv_quantization']) {
+    assert.equal(cols.includes(gone), false, `run should not have ${gone}`);
+  }
+  for (const added of ['version', 'kv_cache_dtype', 'turboquant_mode', 'spec_decode_method', 'engine_type']) {
+    assert.ok(cols.includes(added), `run is missing ${added}`);
+  }
+  cleanup();
+});
+
+test('request sheds the MTP block and gains the proxy columns', () => {
+  const { read, cleanup } = tmpStore();
+  const cols = read<{ name: string }>('PRAGMA table_info(request)').map(c => c.name);
+  for (const gone of ['drafted_by_depth', 'accepted_by_depth', 'accept_rate', 'mtp_depth',
+                      'bonus_tokens', 'correction_tokens', 'verify_calls', 'draft_time_s',
+                      'verify_forward_time_s', 'verify_eval_time_s', 'accept_time_s',
+                      'cache_source', 'session_cache_hit', 'cached_tokens',
+                      'cache_restore_time_s', 'ssd_cache_hit', 'ssd_cached_tokens']) {
+    assert.equal(cols.includes(gone), false, `request should not have ${gone}`);
+  }
+  for (const added of ['outcome', 'status_code', 'streamed', 'finish_reason', 'engine_joined']) {
+    assert.ok(cols.includes(added), `request is missing ${added}`);
+  }
+  cleanup();
+});
+
+test('REQUEST_SERIES keeps only the two request-derived sparklines', () => {
+  assert.deepEqual(Object.keys(REQUEST_SERIES).sort(), ['decode', 'ttft']);
+});
+
+/* Spec section 5: no migration. The old file is moved aside, WAL sidecars and
+   all, and a fresh v2 database takes its place. */
+test('a v1 database is set aside rather than migrated', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
+  const file = path.join(dir, 'history.db');
+
+  const old = new DatabaseSync(file);
+  old.exec('PRAGMA user_version = 1');
+  old.exec('CREATE TABLE legacy (x INTEGER)');
+  old.exec('INSERT INTO legacy VALUES (42)');
+  old.close();
+
+  const store = createStore({ path: file, enabled: true, retentionDays: 30, transcriptRetentionDays: 7 });
+  assert.equal(store.status().ok, true);
+
+  const aside = path.join(dir, 'history-v1-mtplx.db');
+  assert.ok(fs.existsSync(aside), 'old database was not set aside');
+
+  const kept = new DatabaseSync(aside);
+  // See the comment on tmpStore's `read` helper re: null-prototype rows.
+  assert.deepEqual(
+    kept.prepare('SELECT x FROM legacy').all().map(r => ({ ...(r as object) })),
+    [{ x: 42 }]
+  );
+  kept.close();
+
+  const fresh = new DatabaseSync(file);
+  const [{ user_version }] = fresh.prepare('PRAGMA user_version').all() as { user_version: number }[];
+  assert.equal(user_version, 2);
+  assert.equal(
+    fresh.prepare(`SELECT name FROM sqlite_master WHERE name = 'legacy'`).all().length,
+    0,
+    'fresh database should not contain the old schema'
+  );
+  fresh.close();
+
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a matching version is left alone', () => {
+  const { store, file, dir, cleanup } = tmpStore();
+  store.close();
+  const reopened = createStore({ path: file, enabled: true, retentionDays: 30, transcriptRetentionDays: 7 });
+  assert.equal(reopened.status().ok, true);
+  assert.equal(fs.existsSync(path.join(dir, 'history-v2-mtplx.db')), false);
+  reopened.close();
   cleanup();
 });
 
 test('disabled store is inert and never touches the filesystem', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
   const file = path.join(dir, 'history.db');
-  const store = createStore({ path: file, enabled: false, retentionDays: 30 });
+  const store = createStore({ path: file, enabled: false, retentionDays: 30, transcriptRetentionDays: 7 });
 
   assert.equal(store.status().enabled, false);
   assert.equal(store.status().ok, true);
@@ -75,6 +224,7 @@ test('an unopenable path degrades instead of throwing', () => {
     path: path.join(blocker, 'history.db'),
     enabled: true,
     retentionDays: 30,
+    transcriptRetentionDays: 7,
   });
   assert.equal(store.status().ok, false);
   assert.ok(store.status().lastError);
@@ -83,38 +233,24 @@ test('an unopenable path degrades instead of throwing', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-const RUNS = 'SELECT * FROM run ORDER BY id';
+/* ---------------------------------------------------------------------- */
+/* Runs                                                                    */
+/* ---------------------------------------------------------------------- */
 
-function runInfo(pid: number, startedAt: number, over: Partial<RunInfo> = {}): RunInfo {
-  return {
-    pid,
-    startedAt,
-    model: 'test-model',
-    runtimeMode: 'Sustained Max MTP',
-    generationMode: 'mtp',
-    depth: 1,
-    verifyCore: 'linear-gdn-from-conv-tape',
-    pagedKvQuantization: 'q8',
-    contextWindow: 98304,
-    health: JSON.stringify({ ok: true }),
-    ...over,
-  };
-}
-
-test('upsertRun is idempotent for the same pid and start time', () => {
+test('upsertRun is idempotent for the same target and start time', () => {
   const { store, read, cleanup } = tmpStore();
-  const a = store.upsertRun(runInfo(100, 1_700_000_000_000), 1_700_000_001_000);
-  const b = store.upsertRun(runInfo(100, 1_700_000_000_000), 1_700_000_002_000);
+  const a = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_001_000);
+  const b = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_002_000);
   assert.equal(typeof a, 'number');
   assert.equal(b, a);
   assert.equal(read<RunRow>(RUNS).length, 1);
   cleanup();
 });
 
-test('a new run closes the previous one', () => {
+test('a new run for the same target closes the previous one', () => {
   const { store, read, cleanup } = tmpStore();
-  const first = store.upsertRun(runInfo(100, 1_700_000_000_000), 1_700_000_001_000);
-  const second = store.upsertRun(runInfo(200, 1_700_000_500_000), 1_700_000_501_000);
+  const first = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_001_000);
+  const second = store.upsertRun(runInfo('qwen', 1_700_000_500_000), 1_700_000_501_000);
   assert.notEqual(second, first);
 
   const rows = read<RunRow>(RUNS);
@@ -125,13 +261,26 @@ test('a new run closes the previous one', () => {
   cleanup();
 });
 
-test('run promotes health columns and keeps the raw JSON', () => {
+/* Spec/3f: closing must be scoped to the restarting target only — another
+   target's run is unrelated and must survive. */
+test("a new run for a different target does not close the other target's open run", () => {
   const { store, read, cleanup } = tmpStore();
-  const id = store.upsertRun(runInfo(100, 1_700_000_000_000, { depth: 3 }), 1_700_000_001_000);
+  const qwen = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_001_000);
+  const gemma = store.upsertRun(runInfo('gemma', 1_700_000_000_500), 1_700_000_001_500);
+
+  const rows = read<RunRow>(RUNS);
+  assert.equal(rows.find(r => r.id === qwen)?.ended_at, null);
+  assert.equal(rows.find(r => r.id === gemma)?.ended_at, null);
+  cleanup();
+});
+
+test('run promotes rapid-mlx columns and keeps the raw JSON', () => {
+  const { store, read, cleanup } = tmpStore();
+  const id = store.upsertRun(runInfo('qwen', 1_700_000_000_000, { kvCacheDtype: 'int8' }), 1_700_000_001_000);
   const row = read<RunRow>(RUNS).find(r => r.id === id);
-  assert.equal(row?.depth, 3);
-  assert.equal(row?.runtime_mode, 'Sustained Max MTP');
-  assert.equal(row?.paged_kv_quantization, 'q8');
+  assert.equal(row?.kv_cache_dtype, 'int8');
+  assert.equal(row?.engine_type, 'mlx');
+  assert.equal(row?.target_id, 'qwen');
   assert.deepEqual(JSON.parse(String(row?.health)), { ok: true });
   cleanup();
 });
@@ -142,79 +291,72 @@ test('upsertRun on a disabled store returns null', () => {
     path: path.join(dir, 'history.db'),
     enabled: false,
     retentionDays: 30,
+    transcriptRetentionDays: 7,
   });
-  assert.equal(store.upsertRun(runInfo(1, 2), 3), null);
+  assert.equal(store.upsertRun(runInfo('qwen', 2), 3), null);
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-const REC: MetricsRecord = {
-  request_id: 'req-1',
-  session_id: 'sess-1',
-  decode_tok_s: 43.8,
-  display_decode_tok_s: 44.1,
-  prefill_tok_s: 411.5,
-  ttft_s: 1.06,
-  request_elapsed_s: 1.26,
-  prompt_tokens: 436,
-  completion_tokens: 9,
-  drafted_by_depth: [10, 6],
-  accepted_by_depth: [8, 2],
-  session_cache_hit: true,
-  ssd_cache_hit: false,
-  cache_source: 'none',
-  request_client_label: 'opencode',
-  request_model: 'mtplx-qwen36',
-  request_reasoning_mode: 'off',
-  request_last_user_preview: 'hello there',
-};
+/* ---------------------------------------------------------------------- */
+/* Requests / transcripts                                                  */
+/* ---------------------------------------------------------------------- */
 
-const REQUESTS = 'SELECT * FROM request ORDER BY ts';
-
-test('insertRequest maps fields and precomputes accept_rate', () => {
+test('gauges are scoped by target', () => {
   const { store, read, cleanup } = tmpStore();
-  const runId = store.upsertRun(runInfo(100, 1_700_000_000_000), 1_700_000_001_000);
-  store.insertRequest(REC, runId, 1_700_000_002_000);
+  store.insertGauge('qwen', 'requests_running', 1, 1000);
+  store.insertGauge('gemma', 'requests_running', 5, 1000);
+  const rows = read<{ target_id: string; value: number }>(
+    `SELECT target_id, value FROM gauge ORDER BY target_id`
+  );
+  assert.deepEqual(rows, [
+    { target_id: 'gemma', value: 5 },
+    { target_id: 'qwen', value: 1 },
+  ]);
+  cleanup();
+});
+
+test('insertRequestRow maps fields onto the request table', () => {
+  const { store, read, cleanup } = tmpStore();
+  const runId = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_001_000);
+  store.insertRequestRow({ ...REQ, runId });
 
   const rows = read(REQUESTS);
   assert.equal(rows.length, 1);
   const r = rows[0];
   assert.equal(r.request_id, 'req-1');
+  assert.equal(r.target_id, 'qwen');
   assert.equal(r.run_id, runId);
   assert.equal(r.ts, 1_700_000_002_000);
   assert.equal(r.prompt_tokens, 436);
-  assert.equal(r.drafted, 16);
-  assert.equal(r.accepted, 10);
-  assert.equal(r.accept_rate, 10 / 16);
-  assert.deepEqual(JSON.parse(String(r.drafted_by_depth)), [10, 6]);
   assert.equal(r.client_label, 'opencode');
   assert.equal(r.user_preview, 'hello there');
+  assert.equal(r.streamed, 1);
+  assert.equal(r.engine_joined, 1);
   cleanup();
 });
 
-test('booleans become 0/1 and absent fields become null', () => {
+test('booleans become 0/1 and absent optional fields become null', () => {
   const { store, read, cleanup } = tmpStore();
-  store.insertRequest(REC, null, 1_700_000_002_000);
+  store.insertRequestRow({
+    requestId: 'req-2',
+    targetId: 'qwen',
+    runId: null,
+    ts: 1_700_000_002_000,
+    streamed: false,
+  });
   const r = read(REQUESTS)[0];
-  assert.equal(r.session_cache_hit, 1);
-  assert.equal(r.ssd_cache_hit, 0);
+  assert.equal(r.streamed, 0);
   assert.equal(r.run_id, null);
-  assert.equal(r.bonus_tokens, null);
-  assert.equal(r.verify_calls, null);
+  assert.equal(r.status_code, null);
+  assert.equal(r.outcome, null);
   cleanup();
 });
 
-test('accept_rate is null when nothing was drafted', () => {
+test('re-inserting the same request_id preserves the original row', () => {
   const { store, read, cleanup } = tmpStore();
-  store.insertRequest({ ...REC, drafted_by_depth: [], accepted_by_depth: [] }, null, 1);
-  assert.equal(read(REQUESTS)[0].accept_rate, null);
-  cleanup();
-});
-
-test('re-inserting the same request_id preserves the original ts', () => {
-  const { store, read, cleanup } = tmpStore();
-  store.insertRequest(REC, null, 1_700_000_002_000);
-  store.insertRequest({ ...REC, prompt_tokens: 999 }, null, 1_700_000_999_000);
+  store.insertRequestRow({ ...REQ });
+  store.insertRequestRow({ ...REQ, promptTokens: 999, ts: 1_700_000_999_000 });
 
   const rows = read(REQUESTS);
   assert.equal(rows.length, 1);
@@ -223,24 +365,68 @@ test('re-inserting the same request_id preserves the original ts', () => {
   cleanup();
 });
 
-test('a record without a request_id is skipped', () => {
+test('insertTranscript takes ts from the parent request row', () => {
   const { store, read, cleanup } = tmpStore();
-  store.insertRequest({ session_id: 'x' }, null, 1);
-  assert.equal(read(REQUESTS).length, 0);
+  store.insertRequestRow({ requestId: 'r1', targetId: 'qwen', runId: null, ts: 1_700_000_002_000 });
+  store.insertTranscript('r1', '[{"role":"user","content":"hi"}]', 'hello', null, false);
+
+  const rows = read<{ request_id: string; ts: number; messages: string; truncated: number }>(
+    'SELECT * FROM transcript'
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].request_id, 'r1');
+  assert.equal(rows[0].ts, 1_700_000_002_000);
+  assert.deepEqual(JSON.parse(rows[0].messages), [{ role: 'user', content: 'hi' }]);
+  assert.equal(rows[0].truncated, 0);
   cleanup();
 });
 
-import { REQUEST_SERIES } from './db';
+test('insertTranscript is a no-op when the parent request row is missing', () => {
+  const { store, read, cleanup } = tmpStore();
+  store.insertTranscript('ghost', '[]', 'x', null, false);
+  assert.equal(read('SELECT 1 FROM transcript').length, 0);
+  cleanup();
+});
+
+/* Transcripts age out on their own clock so bodies do not force the metrics
+   history to be short, and metrics retention does not force bodies to be kept. */
+test('transcripts prune on their own retention, ahead of requests', () => {
+  const { store, read, cleanup } = tmpStore(30, 7);
+  const now = Date.UTC(2026, 8, 5);
+  const tenDaysAgo = now - 10 * 86_400_000;
+
+  store.insertRequestRow({ requestId: 'r1', targetId: 'qwen', runId: null, ts: tenDaysAgo });
+  store.insertTranscript('r1', '[{"role":"user","content":"hi"}]', 'hello', null, false);
+
+  assert.equal(read(`SELECT 1 FROM transcript`).length, 1);
+  store.prune(now);
+  assert.equal(read(`SELECT 1 FROM transcript`).length, 0, 'transcript should be pruned at 7d');
+  assert.equal(read(`SELECT 1 FROM request`).length, 1, 'request should survive to 30d');
+  cleanup();
+});
+
+test('gaugeNames lists the distinct series recorded for a target', () => {
+  const { store, cleanup } = tmpStore();
+  store.insertGauge('qwen', 'active_requests', 1, 1000);
+  store.insertGauge('qwen', 'requests_running', 2, 1000);
+  store.insertGauge('gemma', 'active_requests', 3, 1000);
+  assert.deepEqual(store.gaugeNames('qwen'), ['active_requests', 'requests_running']);
+  cleanup();
+});
+
+/* ---------------------------------------------------------------------- */
+/* Series queries                                                          */
+/* ---------------------------------------------------------------------- */
 
 test('querySeries buckets request rows and reports bucket starts', () => {
   const { store, cleanup } = tmpStore();
   const base = 1_700_000_000_000;
   // two requests in bucket 0, one in bucket 2, over a 4-bucket window
-  store.insertRequest({ ...REC, request_id: 'a', display_decode_tok_s: 10 }, null, base + 100);
-  store.insertRequest({ ...REC, request_id: 'b', display_decode_tok_s: 20 }, null, base + 200);
-  store.insertRequest({ ...REC, request_id: 'c', display_decode_tok_s: 50 }, null, base + 2500);
+  store.insertRequestRow({ requestId: 'a', targetId: 'qwen', runId: null, ts: base + 100, decodeTokS: 10 });
+  store.insertRequestRow({ requestId: 'b', targetId: 'qwen', runId: null, ts: base + 200, decodeTokS: 20 });
+  store.insertRequestRow({ requestId: 'c', targetId: 'qwen', runId: null, ts: base + 2500, decodeTokS: 50 });
 
-  const res = store.querySeries(['decode'], base, base + 4000, 4);
+  const res = store.querySeries('qwen', ['decode'], base, base + 4000, 4);
   assert.equal(res.bucketMs, 1000);
   assert.deepEqual(res.series.decode, [
     { ts: base, avg: 15, min: 10, max: 20, n: 2 },
@@ -249,25 +435,12 @@ test('querySeries buckets request rows and reports bucket starts', () => {
   cleanup();
 });
 
-test('decode falls back to decode_tok_s when display is absent', () => {
-  const { store, cleanup } = tmpStore();
-  const base = 1_700_000_000_000;
-  store.insertRequest(
-    { ...REC, request_id: 'a', display_decode_tok_s: null, decode_tok_s: 7 },
-    null,
-    base + 10
-  );
-  const res = store.querySeries(['decode'], base, base + 1000, 1);
-  assert.equal(res.series.decode[0].avg, 7);
-  cleanup();
-});
-
 test('querySeries rejects names outside the allowlist', () => {
   const { store, cleanup } = tmpStore();
-  assert.throws(() => store.querySeries(['ttft; DROP TABLE request'], 0, 1000, 1), /unknown series/i);
-  assert.deepEqual(Object.keys(REQUEST_SERIES).sort(), ['accept', 'decode', 'prefill', 'ttft']);
+  assert.throws(() => store.querySeries('qwen', ['ttft; DROP TABLE request'], 0, 1000, 1), /unknown series/i);
+  assert.deepEqual(Object.keys(REQUEST_SERIES).sort(), ['decode', 'ttft']);
   for (const evil of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
-    assert.throws(() => store.querySeries([evil], 0, 1000, 1), /unknown series/i);
+    assert.throws(() => store.querySeries('qwen', [evil], 0, 1000, 1), /unknown series/i);
   }
   assert.equal(store.status().ok, true); // a rejected name must not degrade store health
   cleanup();
@@ -276,11 +449,11 @@ test('querySeries rejects names outside the allowlist', () => {
 test('gauges round-trip through queryGauges', () => {
   const { store, cleanup } = tmpStore();
   const base = 1_700_000_000_000;
-  store.insertGauge('session_bank_bytes', 100, base + 10);
-  store.insertGauge('session_bank_bytes', 300, base + 20);
-  store.insertGauge('active_requests', 1, base + 10);
+  store.insertGauge('qwen', 'session_bank_bytes', 100, base + 10);
+  store.insertGauge('qwen', 'session_bank_bytes', 300, base + 20);
+  store.insertGauge('qwen', 'active_requests', 1, base + 10);
 
-  const res = store.queryGauges(['session_bank_bytes'], base, base + 1000, 1);
+  const res = store.queryGauges('qwen', ['session_bank_bytes'], base, base + 1000, 1);
   assert.deepEqual(res.series.session_bank_bytes, [
     { ts: base, avg: 200, min: 100, max: 300, n: 2 },
   ]);
@@ -289,7 +462,7 @@ test('gauges round-trip through queryGauges', () => {
 
 test('an empty window yields an empty array, not an error', () => {
   const { store, cleanup } = tmpStore();
-  const res = store.querySeries(['decode', 'ttft'], 0, 1000, 10);
+  const res = store.querySeries('qwen', ['decode', 'ttft'], 0, 1000, 10);
   assert.deepEqual(res.series.decode, []);
   assert.deepEqual(res.series.ttft, []);
   cleanup();
@@ -301,28 +474,31 @@ test('a disabled store returns empty series', () => {
     path: path.join(dir, 'history.db'),
     enabled: false,
     retentionDays: 30,
+    transcriptRetentionDays: 7,
   });
-  const res = store.querySeries(['decode'], 0, 1000, 10);
+  const res = store.querySeries('qwen', ['decode'], 0, 1000, 10);
   assert.deepEqual(res.series.decode, []);
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-const DAY = 86_400_000;
+/* ---------------------------------------------------------------------- */
+/* Prune                                                                   */
+/* ---------------------------------------------------------------------- */
 
 test('prune drops rows past the retention cutoff', () => {
   const { store, read, cleanup } = tmpStore(1); // 1-day retention
   const now = 1_700_000_000_000;
-  store.insertRequest({ ...REC, request_id: 'old' }, null, now - 2 * DAY);
-  store.insertRequest({ ...REC, request_id: 'new' }, null, now - 1000);
-  store.insertGauge('active_requests', 1, now - 2 * DAY);
-  store.insertGauge('active_requests', 2, now - 1000);
+  store.insertRequestRow({ requestId: 'old', targetId: 'qwen', runId: null, ts: now - 2 * DAY });
+  store.insertRequestRow({ requestId: 'new', targetId: 'qwen', runId: null, ts: now - 1000 });
+  store.insertGauge('qwen', 'active_requests', 1, now - 2 * DAY);
+  store.insertGauge('qwen', 'active_requests', 2, now - 1000);
 
   store.prune(now);
 
   const ids = read(REQUESTS).map(r => r.request_id);
   assert.deepEqual(ids, ['new']);
-  const g = store.queryGauges(['active_requests'], now - 3 * DAY, now + 1000, 1);
+  const g = store.queryGauges('qwen', ['active_requests'], now - 3 * DAY, now + 1000, 1);
   assert.equal(g.series.active_requests[0].n, 1);
   cleanup();
 });
@@ -330,10 +506,11 @@ test('prune drops rows past the retention cutoff', () => {
 test('prune keeps the open run but drops old closed runs', () => {
   const { store, read, cleanup } = tmpStore(1);
   const now = 1_700_000_000_000;
-  const old = store.upsertRun(runInfo(1, now - 3 * DAY), now - 3 * DAY);
+  const old = store.upsertRun(runInfo('qwen', now - 3 * DAY), now - 3 * DAY);
   /* The SECOND call's `now` is what stamps ended_at on the first run, so it must
-     sit before the retention cutoff for that run to become prunable. */
-  const open = store.upsertRun(runInfo(2, now - 2 * DAY), now - 2 * DAY);
+     sit before the retention cutoff for that run to become prunable. Same
+     target as `old` so upsertRun's same-target close rule actually closes it. */
+  const open = store.upsertRun(runInfo('qwen', now - 2 * DAY), now - 2 * DAY);
   assert.equal(read<RunRow>(RUNS).length, 2);
 
   store.prune(now);
@@ -347,13 +524,15 @@ test('prune keeps the open run but drops old closed runs', () => {
 test('retentionDays of 0 prunes everything', () => {
   const { store, read, cleanup } = tmpStore(0);
   const now = 1_700_000_000_000;
-  store.insertRequest({ ...REC, request_id: 'a' }, null, now - 1);
+  store.insertRequestRow({ requestId: 'a', targetId: 'qwen', runId: null, ts: now - 1 });
   store.prune(now);
   assert.equal(read(REQUESTS).length, 0);
   cleanup();
 });
 
-import type { RunDetail } from './db';
+/* ---------------------------------------------------------------------- */
+/* queryRuns / getRun                                                      */
+/* ---------------------------------------------------------------------- */
 
 test('queryRuns returns an empty array when there are no runs', () => {
   const { store, cleanup } = tmpStore();
@@ -363,34 +542,30 @@ test('queryRuns returns an empty array when there are no runs', () => {
 
 test('queryRuns includes a run with zero requests, aggregates null', () => {
   const { store, cleanup } = tmpStore();
-  const runA = store.upsertRun(runInfo(100, 1_700_000_000_000), 1_700_000_001_000);
+  const runA = store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_001_000);
   const summaries = store.queryRuns(20);
   assert.equal(summaries.length, 1);
   assert.equal(summaries[0].id, runA);
   assert.equal(summaries[0].requestCount, 0);
   assert.deepEqual(summaries[0].decode, { avg: null, min: null, max: null });
   assert.deepEqual(summaries[0].ttft, { avg: null, min: null, max: null });
-  assert.deepEqual(summaries[0].accept, { avg: null, min: null, max: null });
   cleanup();
 });
 
 test('queryRuns aggregates requests per run and orders newest-first', () => {
   const { store, cleanup } = tmpStore();
-  const runA = store.upsertRun(runInfo(100, 1_700_000_000_000, { model: 'model-a' }), 1_700_000_001_000);
-  const runB = store.upsertRun(runInfo(200, 1_700_000_500_000, { model: 'model-b' }), 1_700_000_501_000);
+  const runA = store.upsertRun(runInfo('qwen', 1_700_000_000_000, { model: 'model-a' }), 1_700_000_001_000);
+  const runB = store.upsertRun(runInfo('gemma', 1_700_000_500_000, { model: 'model-b' }), 1_700_000_501_000);
 
-  store.insertRequest(
-    { ...REC, request_id: 'a1', display_decode_tok_s: 10, ttft_s: 1.0, drafted_by_depth: [10], accepted_by_depth: [5] },
-    runA, 1_700_000_002_000
-  );
-  store.insertRequest(
-    { ...REC, request_id: 'a2', display_decode_tok_s: 20, ttft_s: 2.0, drafted_by_depth: [10], accepted_by_depth: [10] },
-    runA, 1_700_000_003_000
-  );
-  store.insertRequest(
-    { ...REC, request_id: 'b1', display_decode_tok_s: 100, ttft_s: 0.1, drafted_by_depth: [4], accepted_by_depth: [4] },
-    runB, 1_700_000_502_000
-  );
+  store.insertRequestRow({
+    requestId: 'a1', targetId: 'qwen', runId: runA, ts: 1_700_000_002_000, decodeTokS: 10, ttftS: 1.0,
+  });
+  store.insertRequestRow({
+    requestId: 'a2', targetId: 'qwen', runId: runA, ts: 1_700_000_003_000, decodeTokS: 20, ttftS: 2.0,
+  });
+  store.insertRequestRow({
+    requestId: 'b1', targetId: 'gemma', runId: runB, ts: 1_700_000_502_000, decodeTokS: 100, ttftS: 0.1,
+  });
 
   const summaries = store.queryRuns(20);
   assert.equal(summaries.length, 2);
@@ -401,15 +576,14 @@ test('queryRuns aggregates requests per run and orders newest-first', () => {
   assert.equal(summaries[1].requestCount, 2);
   assert.deepEqual(summaries[1].decode, { avg: 15, min: 10, max: 20 });
   assert.deepEqual(summaries[1].ttft, { avg: 1.5, min: 1.0, max: 2.0 });
-  assert.deepEqual(summaries[1].accept, { avg: 0.75, min: 0.5, max: 1.0 });
   cleanup();
 });
 
 test('queryRuns respects limit', () => {
   const { store, cleanup } = tmpStore();
-  store.upsertRun(runInfo(100, 1_700_000_000_000), 1_700_000_001_000);
-  store.upsertRun(runInfo(200, 1_700_000_500_000), 1_700_000_501_000);
-  const runC = store.upsertRun(runInfo(300, 1_700_001_000_000), 1_700_001_001_000);
+  store.upsertRun(runInfo('qwen', 1_700_000_000_000), 1_700_000_001_000);
+  store.upsertRun(runInfo('qwen', 1_700_000_500_000), 1_700_000_501_000);
+  const runC = store.upsertRun(runInfo('qwen', 1_700_001_000_000), 1_700_001_001_000);
   const summaries = store.queryRuns(1);
   assert.equal(summaries.length, 1);
   assert.equal(summaries[0].id, runC);
@@ -418,7 +592,12 @@ test('queryRuns respects limit', () => {
 
 test('a disabled store returns an empty run list', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
-  const store = createStore({ path: path.join(dir, 'history.db'), enabled: false, retentionDays: 30 });
+  const store = createStore({
+    path: path.join(dir, 'history.db'),
+    enabled: false,
+    retentionDays: 30,
+    transcriptRetentionDays: 7,
+  });
   assert.deepEqual(store.queryRuns(20), []);
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
@@ -427,13 +606,15 @@ test('a disabled store returns an empty run list', () => {
 test('getRun returns the full run including parsed health', () => {
   const { store, cleanup } = tmpStore();
   const health = JSON.stringify({ ok: true, foo: 'bar' });
-  const id = store.upsertRun(runInfo(100, 1_700_000_000_000, { depth: 3, health }), 1_700_000_001_000) as number;
+  const id = store.upsertRun(
+    runInfo('qwen', 1_700_000_000_000, { kvCacheDtype: 'int8', health }),
+    1_700_000_001_000
+  ) as number;
   const detail = store.getRun(id) as RunDetail;
   assert.ok(detail);
   assert.equal(detail.id, id);
   assert.equal(detail.startedAt, 1_700_000_000_000);
-  assert.equal(detail.depth, 3);
-  assert.equal(detail.runtimeMode, 'Sustained Max MTP');
+  assert.equal(detail.kvCacheDtype, 'int8');
   assert.deepEqual(JSON.parse(detail.health), { ok: true, foo: 'bar' });
   cleanup();
 });
@@ -446,7 +627,12 @@ test('getRun returns null for an unknown id', () => {
 
 test('getRun on a disabled store returns null', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
-  const store = createStore({ path: path.join(dir, 'history.db'), enabled: false, retentionDays: 30 });
+  const store = createStore({
+    path: path.join(dir, 'history.db'),
+    enabled: false,
+    retentionDays: 30,
+    transcriptRetentionDays: 7,
+  });
   assert.equal(store.getRun(1), null);
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });

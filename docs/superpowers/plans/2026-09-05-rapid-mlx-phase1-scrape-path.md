@@ -1587,42 +1587,72 @@ export interface Target {
 
 const DEFAULT_TARGETS = 'qwen=http://127.0.0.1:8000:8010';
 
+const PORT_MIN = 1;
+const PORT_MAX = 65535;
+
+function warn(msg: string): void {
+  console.warn(`[targets] ${msg}`);
+}
+
+/** Parses one `id=<url>[:proxyPort][|label]` entry, or null if it is malformed.
+ *
+ *  Rejecting an out-of-range proxy port matters more than it looks: port 0 is
+ *  falsy, and `proxyPort` is laid down here for a later phase to consume. Code
+ *  that reasonably writes `if (target.proxyPort)` would read an explicit `:0`
+ *  as "no proxy configured" and silently skip a target the operator meant to
+ *  proxy — a config error disguised as a default. */
+function parseOne(chunk: string): Target | null {
+  const [spec, label] = chunk.split('|');
+  const eq = spec.indexOf('=');
+  if (eq < 1) return null;
+
+  const id = spec.slice(0, eq).trim();
+  let rest = spec.slice(eq + 1).trim();
+  if (!id || !rest) return null;
+
+  /* A trailing :NNNN after the URL's own host:port is the proxy port. Both
+     groups anchor on digits, so a bare http://host:8000 keeps its own port and
+     an IPv6 literal's colons cannot produce a wrong split. */
+  let proxyPort: number | null = null;
+  const m = /^(https?:\/\/[^/]+:\d+):(\d+)$/.exec(rest);
+  if (m) {
+    const port = Number.parseInt(m[2], 10);
+    if (port < PORT_MIN || port > PORT_MAX) {
+      warn(`proxy port ${m[2]} in "${chunk}" is outside ${PORT_MIN}-${PORT_MAX}`);
+      return null;
+    }
+    rest = m[1];
+    proxyPort = port;
+  }
+
+  return { id, label: (label || id).trim(), upstreamUrl: rest.replace(/\/+$/, ''), proxyPort };
+}
+
 /** RAPID_MLX_TARGETS is a comma-separated list of
  *  `id=<upstreamUrl>[:<proxyPort>][|<label>]`, e.g.
  *    qwen=http://127.0.0.1:8000:8010|Qwen3.6-35B-A3B,gemma=http://127.0.0.1:8087:8011
  *  Phase 1 uses one entry; the list shape is what Phase 3 extends. */
 export function parseTargets(env: NodeJS.ProcessEnv): Target[] {
-  const raw = (env.RAPID_MLX_TARGETS || '').trim() || DEFAULT_TARGETS;
+  const raw = (env.RAPID_MLX_TARGETS || '').trim();
+  const usingDefault = raw === '';
   const out: Target[] = [];
 
-  for (const chunk of raw.split(',').map(s => s.trim()).filter(Boolean)) {
-    const [spec, label] = chunk.split('|');
-    const eq = spec.indexOf('=');
-    if (eq < 1) continue;
-
-    const id = spec.slice(0, eq).trim();
-    let rest = spec.slice(eq + 1).trim();
-    if (!id || !rest) continue;
-
-    /* A trailing :NNNN after the URL's own host:port is the proxy port. Match
-       only a port that follows a port, so a bare http://host:8000 is not
-       mistaken for a proxy port. */
-    let proxyPort: number | null = null;
-    const m = /^(https?:\/\/[^/]+:\d+):(\d+)$/.exec(rest);
-    if (m) {
-      rest = m[1];
-      proxyPort = Number.parseInt(m[2], 10);
-    }
-
-    out.push({
-      id,
-      label: (label || id).trim(),
-      upstreamUrl: rest.replace(/\/+$/, ''),
-      proxyPort,
-    });
+  for (const chunk of (usingDefault ? DEFAULT_TARGETS : raw).split(',').map(s => s.trim()).filter(Boolean)) {
+    const target = parseOne(chunk);
+    if (target) out.push(target);
+    /* Never drop a misconfigured entry silently. With more than one target a
+       single typo would otherwise start the dashboard against a partial fleet
+       and look entirely healthy doing it. */
+    else warn(`ignoring malformed entry "${chunk}"`);
   }
 
-  return out.length ? out : parseTargets({ RAPID_MLX_TARGETS: DEFAULT_TARGETS });
+  if (out.length) return out;
+  /* Unreachable when usingDefault — DEFAULT_TARGETS is a constant that parses —
+     but the guard makes the single-level recursion structural rather than a
+     property a future edit could quietly break. */
+  if (usingDefault) throw new Error('DEFAULT_TARGETS is malformed');
+  warn(`no usable entries in RAPID_MLX_TARGETS; falling back to "${DEFAULT_TARGETS}"`);
+  return parseTargets({});
 }
 ```
 
@@ -1697,17 +1727,58 @@ test('strips a trailing slash from the upstream URL', () => {
   assert.equal(t[0].upstreamUrl, 'http://127.0.0.1:8000');
 });
 
-test('falls back to the default when every entry is malformed', () => {
-  const t = parseTargets({ RAPID_MLX_TARGETS: 'garbage,,=,x=' });
+/** Captures console.warn for the duration of fn. */
+function captureWarnings(fn: () => void): string[] {
+  const lines: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => { lines.push(args.join(' ')); };
+  try { fn(); } finally { console.warn = original; }
+  return lines;
+}
+
+test('falls back to the default when every entry is malformed, and says so', () => {
+  let t: ReturnType<typeof parseTargets> = [];
+  const warnings = captureWarnings(() => { t = parseTargets({ RAPID_MLX_TARGETS: 'garbage,,=,x=' }); });
   assert.equal(t.length, 1);
   assert.equal(t[0].id, 'qwen');
+  assert.ok(warnings.some(w => w.includes('falling back')), 'fallback was silent');
+});
+
+/* A typo in one entry of a multi-target list must not quietly start the
+   dashboard against half the fleet looking perfectly healthy. */
+test('a malformed entry is dropped loudly, and its valid siblings survive', () => {
+  let t: ReturnType<typeof parseTargets> = [];
+  const warnings = captureWarnings(() => {
+    t = parseTargets({ RAPID_MLX_TARGETS: 'good=http://127.0.0.1:8000:8010,badnoequals' });
+  });
+  assert.equal(t.length, 1);
+  assert.equal(t[0].id, 'good');
+  assert.ok(warnings.some(w => w.includes('badnoequals')), 'skipped entry was not reported');
+});
+
+/* Port 0 is falsy, so a later `if (target.proxyPort)` would read an explicit
+   :0 as "no proxy configured" — a config error wearing a default's clothes. */
+test('an out-of-range proxy port is rejected rather than carried', () => {
+  for (const bad of ['0', '99999']) {
+    let t: ReturnType<typeof parseTargets> = [];
+    const warnings = captureWarnings(() => {
+      t = parseTargets({ RAPID_MLX_TARGETS: `a=http://127.0.0.1:8000:${bad},b=http://127.0.0.1:8087:8011` });
+    });
+    assert.deepEqual(t.map(x => x.id), ['b'], `proxy port ${bad} was accepted`);
+    assert.ok(warnings.some(w => w.includes(bad)), `proxy port ${bad} was dropped silently`);
+  }
+});
+
+test('valid boundary proxy ports are accepted', () => {
+  const t = parseTargets({ RAPID_MLX_TARGETS: 'a=http://127.0.0.1:8000:1,b=http://127.0.0.1:8087:65535' });
+  assert.deepEqual(t.map(x => x.proxyPort), [1, 65535]);
 });
 ```
 
 - [ ] **Step 3: Run the tests**
 
 Run: `node --disable-warning=ExperimentalWarning --import tsx --test server/targets.test.ts`
-Expected: PASS, 5 tests.
+Expected: PASS, 9 tests.
 
 - [ ] **Step 4: Commit**
 
@@ -2201,7 +2272,7 @@ git rm server/metricsPoller.ts
 node --disable-warning=ExperimentalWarning --import tsx --test server/promScraper.test.ts
 ```
 
-Expected: PASS, 5 tests.
+Expected: PASS, 9 tests.
 
 - [ ] **Step 6: Commit**
 
@@ -2686,7 +2757,7 @@ git commit -m "chore: retire MTPLX artifacts, document the rapid-mlx architectur
 
 ## Done when
 
-- `npm test` passes: `promParse` (13), `promSeries` (15), `runTracker` (12), `targets` (5), `promScraper` (5), `db` (existing plus 8 new).
+- `npm test` passes: `promParse` (13), `promSeries` (15), `runTracker` (12), `targets` (9), `promScraper` (5), `db` (existing plus 8 new).
 - `npm run typecheck` and `npm run build` are clean.
 - The dashboard shows live throughput, memory, queue, prefix-cache and outcome data against the real `:8000` server.
 - Exactly one `run` row exists after several minutes of uptime.

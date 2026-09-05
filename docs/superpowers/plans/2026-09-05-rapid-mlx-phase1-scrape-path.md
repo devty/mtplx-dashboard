@@ -771,6 +771,30 @@ test('WAL sidecars move with the set-aside database', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('an orphaned sidecar does not get overwritten by a set-aside', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
+  const file = path.join(dir, 'history.db');
+
+  const db = new DatabaseSync(file);
+  db.exec('PRAGMA user_version = 1');
+  db.exec('CREATE TABLE legacy (x INTEGER)');
+  db.close();
+  fs.writeFileSync(file + '-wal', 'incoming-wal');
+
+  /* An archive whose .db was deleted but whose sidecar was left behind. */
+  fs.writeFileSync(path.join(dir, 'history-v1-mtplx.db-wal'), 'orphan');
+
+  createStore({ path: file, enabled: true, retentionDays: 30, transcriptRetentionDays: 7 }).close();
+
+  assert.equal(
+    fs.readFileSync(path.join(dir, 'history-v1-mtplx.db-wal'), 'utf8'),
+    'orphan',
+    'orphaned sidecar was overwritten'
+  );
+  assert.equal(fs.readFileSync(path.join(dir, 'history-v1-mtplx.2.db-wal'), 'utf8'), 'incoming-wal');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('a matching version is left alone', () => {
   const { store, file, dir, cleanup } = tmpStore();
   store.close();
@@ -960,8 +984,14 @@ Delete the now-unused `acceptRate()` export and its `sumArr` helper, plus the `d
        path to look at it, and the next start eating it. Never reuse a name.
        Uniqueness also guarantees the new aside has no pre-existing -wal/-shm
        to inherit, which is the corruption this whole block exists to avoid. */
+    /* A name is taken if ANY of its three files exists. Probing only the .db
+       would let an orphaned sidecar — left by a crash, or by deleting an
+       archive's .db but not its companions — be silently overwritten by the
+       sidecar rename below, which is the same clobber bug one level down. */
+    const taken = (p: string): boolean =>
+      fs.existsSync(p) || fs.existsSync(p + '-wal') || fs.existsSync(p + '-shm');
     let aside = `${base}-v${version}-mtplx.db`;
-    for (let n = 2; fs.existsSync(aside); n++) aside = `${base}-v${version}-mtplx.${n}.db`;
+    for (let n = 2; taken(aside); n++) aside = `${base}-v${version}-mtplx.${n}.db`;
     fs.renameSync(file, aside);
     for (const suffix of ['-wal', '-shm']) {
       if (fs.existsSync(file + suffix)) fs.renameSync(file + suffix, aside + suffix);

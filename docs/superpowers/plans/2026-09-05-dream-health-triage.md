@@ -728,14 +728,16 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `server/db.test.ts` (keep the file's existing temp-dir helper — do not introduce a second one):
+Append to `server/db.test.ts`. Use the file's **existing** helper `tmpStore()` (defined at `server/db.test.ts:18`), which returns `{ store, read, file, dir, cleanup }` — do not introduce a second helper. End each new test with `cleanup()` in place of the `store.close()` shown below, matching the file's own convention.
+
+Two gotchas this file already documents and your tests inherit: the store is a real on-disk SQLite file (not `:memory:`, which is private to the opening connection), and `node:sqlite`'s `.all()` returns null-prototype row objects — under `node:assert/strict`, `deepEqual` fails on the prototype mismatch alone. Assert on individual fields, as the tests below do, or spread the row first.
 
 ```typescript
 import { parseDreamLog } from './dreamParse';
 import { attributeRun } from './dreamAttribute';
 
 test('stores a dream run and reads it back as a night', () => {
-  const store = makeStore(); // existing helper: throwaway on-disk sqlite
+  const { store, cleanup } = tmpStore(); // existing helper: throwaway on-disk sqlite
   const text = [
     '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
     '[dream-nightly] cycling sources: default',
@@ -768,7 +770,7 @@ test('stores a dream run and reads it back as a night', () => {
 });
 
 test('a missed night is a row with no run', () => {
-  const store = makeStore();
+  const { store, cleanup } = tmpStore();
   store.upsertDreamNight('2026-09-03', Date.parse('2026-09-03T07:05:00'), null, 'missed');
   const [night] = store.queryDreamNights(10);
   assert.equal(night.status, 'missed');
@@ -778,7 +780,7 @@ test('a missed night is a row with no run', () => {
 });
 
 test('nested item failures survive the round trip', () => {
-  const store = makeStore();
+  const { store, cleanup } = tmpStore();
   const text = [
     '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
     '[dream-nightly] cycling sources: default',
@@ -799,7 +801,7 @@ test('nested item failures survive the round trip', () => {
 });
 
 test('ingest offset round-trips and defaults to zero', () => {
-  const store = makeStore();
+  const { store, cleanup } = tmpStore();
   assert.equal(store.dreamIngestOffset(), 0);
   store.setDreamIngestOffset(4096);
   assert.equal(store.dreamIngestOffset(), 4096);
@@ -807,7 +809,7 @@ test('ingest offset round-trips and defaults to zero', () => {
 });
 
 test('phase names are stored as values, not interpolated', () => {
-  const store = makeStore();
+  const { store, cleanup } = tmpStore();
   const text = [
     '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
     '[dream-nightly] cycling sources: default',
@@ -1178,6 +1180,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
   - `parseSchedule(plistXml: string): DreamSchedule | null`
   - `expectedNights(schedule: DreamSchedule, from: number, to: number): NightSlot[]`
   - `deriveNights(runs, schedule, now): DerivedNight[]`
+  - `localDate(ms: number): string` — local-time `YYYY-MM-DD`. **Exported for Task 5**, which must import it rather than re-deriving the key.
   - Types `DreamSchedule { hour: number; minute: number }`, `NightSlot { date: string; expectedAt: number }`, `DerivedNight { date; expectedAt; runIndex: number | null; status: DreamNightStatus }`.
 
 - [ ] **Step 1: Capture the gap fixture**
@@ -1319,7 +1322,10 @@ export function parseSchedule(plistXml: string): DreamSchedule | null {
   return { hour, minute };
 }
 
-function localDate(ms: number): string {
+/** Local-time `YYYY-MM-DD`. Exported because dreamIngest keys nights by the
+ *  same string: two independent derivations of it can drift, and a drifted key
+ *  orphans a night from its run silently rather than loudly. */
+export function localDate(ms: number): string {
   const d = new Date(ms);
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
@@ -1566,7 +1572,7 @@ import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { parseDreamLog, parseDreamCommits } from './dreamParse';
 import { attributeRun } from './dreamAttribute';
-import { parseSchedule, deriveNights } from './dreamSchedule';
+import { parseSchedule, deriveNights, localDate } from './dreamSchedule';
 import type { Store, DreamCommitSource } from './db';
 
 export interface DreamIngestOptions {
@@ -1653,10 +1659,9 @@ class Ingest implements DreamIngest {
     for (const run of parsed.runs) attributeRun(run);
 
     const runIds: (number | null)[] = parsed.runs.map((run) => {
-      const date = new Date(run.startedAt);
-      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
-        date.getDate()
-      ).padStart(2, '0')}`;
+      /* Same derivation dreamSchedule uses, imported rather than repeated —
+         a drifted date key would orphan nights from their runs silently. */
+      const key = localDate(run.startedAt);
       const fromLog = run.committedShas.size > 0;
       const fromGit = commits?.get(key) ?? null;
 
@@ -1768,6 +1773,12 @@ function harness() {
   const env = {
     GBRAIN_LOG_PATH: path.join(dir, 'dream.log'),
     GBRAIN_DREAM_PLIST: path.join(dir, 'agent.plist'),
+    /* Must be set. The default is ~/mybrain, which on a developer's machine is
+       a real git repo — leaving this unset makes the git cross-check shell out
+       against their actual brain and the assertions move with their commit
+       history. Pointing at a non-repo pins commit_source to 'unavailable';
+       the 'git' and 'both' paths are covered by dreamIngest's own tests. */
+    GBRAIN_BRAIN_DIR: path.join(dir, 'not-a-repo'),
   } as NodeJS.ProcessEnv;
   return { store, env, dir };
 }

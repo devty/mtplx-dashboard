@@ -1,3 +1,5 @@
+import { parseTargets } from './targets';
+
 function str(name: string, def: string): string {
   const v = process.env[name];
   return v && v.trim() ? v.trim() : def;
@@ -17,16 +19,23 @@ function bool(name: string, def: boolean): boolean {
 }
 
 export const config = Object.freeze({
-  mtplxUrl: str('MTPLX_URL', 'http://127.0.0.1:8000').replace(/\/+$/, ''),
+  targets: parseTargets(process.env),
   port: int('PORT', 8123),
   pollIntervalMs: int('POLL_INTERVAL_MS', 1000),
-  mtplxTimeoutMs: int('MTPLX_TIMEOUT_MS', 2500),
+  /** Scrape budget only. Deliberately NOT reused for the Phase 2 forward path:
+   *  gbrain does not time out local inference (see its
+   *  test/ai/local-fetch-no-timeout.test.ts) and a cold-cache 35B MoE can run
+   *  for minutes. See spec section 7. */
+  scrapeTimeoutMs: int('SCRAPE_TIMEOUT_MS', 2500),
   ringSize: int('RING_SIZE', 120),
   logBufferSize: int('LOG_BUFFER_SIZE', 300),
   maxBackoffMs: int('MAX_BACKOFF_MS', 10000),
   dbPath: str('DB_PATH', 'data/history.db'),
   persistEnabled: bool('PERSIST_ENABLED', true),
   retentionDays: int('RETENTION_DAYS', 30),
+  transcriptRetentionDays: int('TRANSCRIPT_RETENTION_DAYS', 7),
   pruneIntervalMs: int('PRUNE_INTERVAL_MS', 3600000),
   healthIntervalMs: int('HEALTH_INTERVAL_MS', 5000),
+  /** Gauges persist far slower than they are scraped — see Task 7. */
+  gaugePersistIntervalMs: int('GAUGE_PERSIST_INTERVAL_MS', 10000),
 });

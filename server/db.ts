@@ -325,8 +325,14 @@ class SqliteStore implements Store {
        path to look at it, and the next start eating it. Never reuse a name.
        Uniqueness also guarantees the new aside has no pre-existing -wal/-shm
        to inherit, which is the corruption this whole block exists to avoid. */
+    /* A name is taken if ANY of its three files exists. Probing only the .db
+       would let an orphaned sidecar — left by a crash, or by deleting an
+       archive's .db but not its companions — be silently overwritten by the
+       sidecar rename below, which is the same clobber bug one level down. */
+    const taken = (p: string): boolean =>
+      fs.existsSync(p) || fs.existsSync(p + '-wal') || fs.existsSync(p + '-shm');
     let aside = `${base}-v${version}-mtplx.db`;
-    for (let n = 2; fs.existsSync(aside); n++) aside = `${base}-v${version}-mtplx.${n}.db`;
+    for (let n = 2; taken(aside); n++) aside = `${base}-v${version}-mtplx.${n}.db`;
     fs.renameSync(file, aside);
     for (const suffix of ['-wal', '-shm']) {
       if (fs.existsSync(file + suffix)) fs.renameSync(file + suffix, aside + suffix);

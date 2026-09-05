@@ -195,6 +195,11 @@ export interface Store {
   queryDreamNights(limit: number): DreamNightRow[];
   getDreamNight(date: string): DreamNightDetail | null;
   upsertDreamNight(date: string, expectedAt: number, runId: number | null, status: DreamNightStatus): void;
+  /** Writes a night row only when that date has none. Used for slots derived
+   *  OUTSIDE the evidence a pass actually parsed, so a later pass can never
+   *  overwrite a verdict an earlier one established. */
+  insertDreamNightIfAbsent(date: string, expectedAt: number, status: DreamNightStatus): void;
+  latestDreamNight(): { date: string; expectedAt: number } | null;
   dreamIngestOffset(): number;
   setDreamIngestOffset(offset: number): void;
   close(): void;
@@ -873,6 +878,34 @@ class SqliteStore implements Store {
         .run(date, expectedAt, runId, status);
     } catch (err) {
       this.fail('upsertDreamNight', err);
+    }
+  }
+
+  insertDreamNightIfAbsent(date: string, expectedAt: number, status: DreamNightStatus): void {
+    if (!this.db) return;
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO dream_night (date, expected_at, run_id, status)
+           VALUES (?, ?, NULL, ?)
+           ON CONFLICT(date) DO NOTHING`
+        )
+        .run(date, expectedAt, status);
+    } catch (err) {
+      this.fail('insertDreamNightIfAbsent', err);
+    }
+  }
+
+  latestDreamNight(): { date: string; expectedAt: number } | null {
+    if (!this.db) return null;
+    try {
+      const row = this.db
+        .prepare('SELECT date, expected_at AS expectedAt FROM dream_night ORDER BY date DESC LIMIT 1')
+        .get() as { date: string; expectedAt: number } | undefined;
+      return row ?? null;
+    } catch (err) {
+      this.fail('latestDreamNight', err);
+      return null;
     }
   }
 

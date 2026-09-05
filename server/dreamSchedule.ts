@@ -26,8 +26,6 @@ export interface DerivedNight extends NightSlot {
   status: DreamNightStatus;
 }
 
-const DAY_MS = 86_400_000;
-
 /** `StartCalendarInterval` → hour/minute. Returns null when either key is
  *  absent or unparseable; callers must treat null as "unknown", not "default". */
 export function parseSchedule(plistXml: string): DreamSchedule | null {
@@ -53,25 +51,47 @@ export function localDate(ms: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+/** Local start-of-day for `ms`, as a Date positioned on that calendar day. */
+function startOfLocalDay(ms: number): Date {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/** One slot per LOCAL CALENDAR DAY from the day containing `from` through the
+ *  day containing `to`, each at the scheduled wall-clock time.
+ *
+ *  The window is derived from calendar days, never from timestamp arithmetic on
+ *  `from`. A run always starts a little AFTER its scheduled second, so a
+ *  window anchored on a run's raw timestamp with a "skip the slot if it is
+ *  before `from`" clamp would drop that run's own night and then report it
+ *  missed. Anchoring on the day removes the clamp, and with it the class of bug
+ *  that a fixed `- DAY_MS` lookback was masking.
+ *
+ *  A slot whose scheduled time has not arrived yet (`expectedAt > to`) is not
+ *  emitted: tonight's dream has not failed to run until it is late. */
 export function expectedNights(
   schedule: DreamSchedule,
   from: number,
   to: number
 ): NightSlot[] {
   const out: NightSlot[] = [];
-  const cursor = new Date(from);
-  cursor.setHours(schedule.hour, schedule.minute, 0, 0);
-  /* Starting before `from` would emit a slot the caller did not ask for. */
-  if (cursor.getTime() < from) cursor.setDate(cursor.getDate() + 1);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) return out;
 
-  /* Advance by calendar date, not by adding a fixed 24h in milliseconds.
-   *  This is local-time deliberately (see file header): a fixed-ms step drifts
-   *  by an hour across a DST transition, and the drift never self-corrects —
-   *  every slot afterwards inherits it. setDate() re-derives the wall clock
-   *  from the local calendar fields, so 07:05 stays 07:05 on both sides of the
-   *  transition. */
-  for (let t = cursor.getTime(); t <= to; cursor.setDate(cursor.getDate() + 1), t = cursor.getTime()) {
-    out.push({ date: localDate(t), expectedAt: t });
+  const cursor = startOfLocalDay(from);
+  const lastDay = startOfLocalDay(to).getTime();
+
+  /* Advance by calendar date, not by adding a fixed 24h in milliseconds. This
+   *  is local-time deliberately (see file header): a fixed-ms step drifts by an
+   *  hour across a DST transition, and the drift never self-corrects — every
+   *  slot afterwards inherits it. setDate() re-derives the wall clock from the
+   *  local calendar fields, so 07:05 stays 07:05 on both sides. */
+  while (cursor.getTime() <= lastDay) {
+    const at = new Date(cursor);
+    at.setHours(schedule.hour, schedule.minute, 0, 0);
+    const t = at.getTime();
+    if (t <= to) out.push({ date: localDate(t), expectedAt: t });
+    cursor.setDate(cursor.getDate() + 1);
   }
   return out;
 }
@@ -86,12 +106,25 @@ const STATUS: Record<string, DreamNightStatus> = {
 export function deriveNights(
   runs: DreamRunRecord[],
   schedule: DreamSchedule | null,
-  now: number
+  now: number,
+  /** Inclusive lower bound of the window the caller can VOUCH for: the caller
+   *  guarantees `runs` holds every run that started at or after this instant.
+   *  Defaults to the earliest run passed in, which is what an ingest pass can
+   *  honestly claim — it parsed from that run's `starting` line to end-of-file.
+   *
+   *  This bound is load-bearing. Ingest rewinds to the last INCOMPLETE run and
+   *  re-parses forward, so on every pass after the first `runs` is only a tail.
+   *  A window wider than the tail would emit `missed` for nights the pass never
+   *  looked at, and the upsert would overwrite the correct rows an earlier pass
+   *  wrote. Never widen it to cover history this pass did not read. */
+  windowStart: number | null = null
 ): DerivedNight[] {
   const byDate = new Map<string, { run: DreamRunRecord; index: number }>();
   runs.forEach((run, index) => {
-    const date = localDate(run.startedAt);
-    if (!byDate.has(date)) byDate.set(date, { run, index });
+    /* Last attempt wins. A night that was retried has two runs; taking the
+       latest keeps the answer stable across a rewind (which re-parses only the
+       tail) and reports the outcome that actually stands. */
+    byDate.set(localDate(run.startedAt), { run, index });
   });
 
   /* No schedule: report only nights we have evidence for. */
@@ -106,12 +139,10 @@ export function deriveNights(
       .sort((a, b) => a.date.localeCompare(b.date));
   }
 
-  if (runs.length === 0) return [];
+  const from = windowStart ?? (runs.length ? Math.min(...runs.map((r) => r.startedAt)) : null);
+  if (from === null) return [];
 
-  const first = Math.min(...runs.map((r) => r.startedAt));
-  const slots = expectedNights(schedule, first - DAY_MS, now);
-
-  return slots.map((slot) => {
+  const out: DerivedNight[] = expectedNights(schedule, from, now).map((slot) => {
     const hit = byDate.get(slot.date);
     if (hit) {
       return {
@@ -122,4 +153,24 @@ export function deriveNights(
     }
     return { ...slot, runIndex: null, status: 'missed' as DreamNightStatus };
   });
+
+  /* Evidence outranks the schedule walk. That walk stops at `now` so tonight is
+     not called missed before it is due — a guard against inventing an alarm,
+     which must never turn into suppressing a night we actually have a run for
+     (a clock behind the log, a run recorded ahead of `now`). A date with a run
+     is never "not yet due", so it is added here rather than dropped. Only
+     `missed` rows come from the walk; nothing here widens the window. */
+  const covered = new Set(out.map((n) => n.date));
+  const floor = localDate(from);
+  for (const [date, hit] of byDate) {
+    if (covered.has(date) || date < floor) continue;
+    out.push({
+      date,
+      expectedAt: hit.run.startedAt,
+      runIndex: hit.index,
+      status: STATUS[hit.run.termination] ?? 'unknown',
+    });
+  }
+  out.sort((a, b) => a.date.localeCompare(b.date));
+  return out;
 }

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { parseDreamLog, parseDreamCommits } from './dreamParse';
 import { attributeRun } from './dreamAttribute';
-import { parseSchedule, deriveNights, localDate } from './dreamSchedule';
+import { parseSchedule, deriveNights, expectedNights, localDate } from './dreamSchedule';
 import type { Store, DreamCommitSource } from './db';
 
 export interface DreamIngestOptions {
@@ -89,6 +89,9 @@ class Ingest implements DreamIngest {
     }
 
     const parsed = parseDreamLog(text);
+    const oldestRun = parsed.runs.length
+      ? Math.min(...parsed.runs.map((r) => r.startedAt))
+      : null;
     const commits = readCommits(this.o.brainDir);
     const schedule = readSchedule(this.o.plistPath);
 
@@ -111,10 +114,33 @@ class Ingest implements DreamIngest {
       return store.insertDreamRun(run, fromGit, source);
     });
 
-    for (const night of deriveNights(parsed.runs, schedule, now)) {
+    /* The window this pass can vouch for. Ingest rewinds to the last incomplete
+       run, so `parsed.runs` is a TAIL on every pass after the first — it holds
+       every run from `oldestRun` forward, and nothing before it. Deriving
+       nights over a wider window would emit `missed` for nights this pass never
+       read, and the upsert would overwrite the correct rows an earlier pass
+       wrote. */
+    for (const night of deriveNights(parsed.runs, schedule, now, oldestRun)) {
       const id = night.runIndex === null ? null : runIds[night.runIndex] ?? null;
       store.upsertDreamNight(night.date, night.expectedAt, id, night.status);
     }
+
+    /* Forward edge. When the log ends on a completed run the offset sits at
+       end-of-file, so a later pass parses no runs at all and the loop above
+       claims nothing — yet "last night never ran" (spec section 3) is exactly
+       the case that needs claiming. Walk the schedule forward from the newest
+       night already on record to now, and write ONLY where no row exists: a
+       forward slot is by definition after all the evidence, and insert-if-absent
+       means this can never restate a night an earlier pass settled. */
+    if (schedule) {
+      const latest = store.latestDreamNight();
+      if (latest) {
+        for (const slot of expectedNights(schedule, latest.expectedAt, now)) {
+          store.insertDreamNightIfAbsent(slot.date, slot.expectedAt, 'missed');
+        }
+      }
+    }
+
 
     /* Rewind to the last unterminated run so it is re-read next pass; a run
        that was `running` when we parsed it would otherwise be frozen in that

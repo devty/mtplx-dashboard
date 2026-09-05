@@ -910,6 +910,31 @@ test('stores a dream run and reads it back as a night', () => {
   cleanup();
 });
 
+test('insert-if-absent never restates a night that already has a verdict', () => {
+  const { store, cleanup } = tmpStore();
+  store.upsertDreamNight('2026-09-03', 111, null, 'ok');
+  store.insertDreamNightIfAbsent('2026-09-03', 222, 'missed');
+  store.insertDreamNightIfAbsent('2026-09-04', 333, 'missed');
+
+  const byDate = new Map(store.queryDreamNights(10).map((n) => [n.date, n]));
+  assert.equal(byDate.get('2026-09-03')?.status, 'ok');
+  assert.equal(byDate.get('2026-09-03')?.expectedAt, 111);
+  assert.equal(byDate.get('2026-09-04')?.status, 'missed');
+  cleanup();
+});
+
+test('the latest night is the newest date on record', () => {
+  const { store, cleanup } = tmpStore();
+  assert.equal(store.latestDreamNight(), null);
+  store.upsertDreamNight('2026-09-03', 111, null, 'ok');
+  store.upsertDreamNight('2026-09-05', 333, null, 'missed');
+  store.upsertDreamNight('2026-09-04', 222, null, 'ok');
+  // node:sqlite hands back null-prototype rows, so compare field-wise.
+  assert.equal(store.latestDreamNight()?.date, '2026-09-05');
+  assert.equal(store.latestDreamNight()?.expectedAt, 333);
+  cleanup();
+});
+
 test('a missed night is a row with no run', () => {
   const { store, cleanup } = tmpStore();
   store.upsertDreamNight('2026-09-03', Date.parse('2026-09-03T07:05:00'), null, 'missed');

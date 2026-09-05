@@ -558,7 +558,7 @@ The full v2 `request` shape is created now even though nothing writes to it in P
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `server/db.test.ts`. Update the existing `tmpStore` helper to pass the new option, then add these tests:
+Add to `server/db.test.ts`. First extend its import to `import { createStore, SCHEMA_VERSION, REQUEST_SERIES } from './db';` (controller ruling R3 — the new cases reference `REQUEST_SERIES`). Then update the existing `tmpStore` helper to pass the new option, then add these tests:
 
 ```ts
 /* Replace the existing tmpStore signature with this one. */
@@ -1021,6 +1021,24 @@ export interface RequestRow {
 ```
 
 Note `insertTranscript` takes `ts` from the parent `request` row via `SELECT`, so the two can never disagree — which is what the independent prune below relies on.
+
+Also implement `gaugeNames` on `SqliteStore` (controller ruling R1 — it is declared on the interface here, so it must be implemented here or `implements Store` will not compile):
+
+```ts
+  gaugeNames(targetId: string): string[] {
+    if (!this.db) return [];
+    try {
+      return (
+        this.db
+          .prepare('SELECT DISTINCT series FROM gauge WHERE target_id = ? ORDER BY series')
+          .all(targetId) as { series: string }[]
+      ).map(r => r.series);
+    } catch (err) {
+      this.fail('gaugeNames', err);
+      return [];
+    }
+  }
+```
 
 Update the `Store` interface itself to match, or none of this is callable: remove `insertRequest`, and add
 
@@ -1620,6 +1638,7 @@ git commit -m "refactor: healthPoller caches JSON endpoints only, no longer owns
 ## Task 7: The scraper
 
 **Files:**
+- Modify: `server/types.ts`
 - Create: `server/promScraper.ts`
 - Delete: `server/metricsPoller.ts`
 - Test: `server/promScraper.test.ts`
@@ -1638,7 +1657,52 @@ Two suppressions, both with precedent in the code you are replacing (`metricsPol
 
 **Ring samples** (spec §4.2 and §5.4): `decode` takes `model_decode_tokens_per_second_last`, pushed only when `requests_processed_total` actually advanced — otherwise the same completed request would be re-sampled every second and flatten the sparkline. `ttft` takes `Δttft_sum / Δttft_count` when `Δcount > 0`. Phase 1 has no `request` rows, so `/api/history/series` returns nothing and the range selector reads `/api/history/gauges` instead.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Rewrite `server/types.ts` first**
+
+Controller ruling R2: this moved here from Task 8 because `getSnapshot()` below returns the new shape, so the type must exist before the scraper compiles.
+
+Delete `MetricsRecord`, `ToolParseCounters`, `MtplxMetricsResponse`, `HealthResponse`, `LogEntry` and the `log` block of `StatePayload`. Keep `RingBuffers`. Replace `StatePayload`:
+
+```ts
+import type { PersistStatus } from './db';
+
+export interface RingBuffers {
+  decode: (number | null)[];
+  prefill: (number | null)[];
+  ttft: (number | null)[];
+  accept: (number | null)[];
+}
+
+/** Single payload shape for both the initial SSE 'snapshot' and every later
+ *  'tick'. Sent in full, never diffed — broadcasts only happen on genuine
+ *  change, so the payload size is not the bottleneck. */
+export interface StatePayload {
+  targetId: string | null;
+  targetLabel: string | null;
+  /** Whether the last /metrics scrape succeeded. */
+  scrapeOk: boolean;
+  /** Capture-proxy forward-path health. Always null in Phase 1 — there is no
+   *  proxy yet. The two are independent: a failed scrape says nothing about
+   *  whether inference is serving. */
+  upstreamOk: boolean | null;
+  lastOkAt: number | null;
+  lastChangeAt: number | null;
+  model: string | null;
+  version: string | null;
+  contextWindow: number | null;
+  /** Every current sample, keyed by the same series name used in the gauge
+   *  table, so the client never reimplements the parser. */
+  series: Record<string, number>;
+  /** Raw /v1/status body, for the queue and memory cards. */
+  status: unknown;
+  rings: RingBuffers;
+  ringSize: number;
+  persist: PersistStatus;
+}
+```
+
+
+- [ ] **Step 2: Write the failing test**
 
 Create `server/promScraper.test.ts`. This tests the pure derivation helper only; the poll loop is covered by running the real thing in Task 8's verification.
 
@@ -1716,12 +1780,12 @@ test('a counter reset yields nulls rather than a spike', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [ ] **Step 3: Run the test to verify it fails**
 
 Run: `node --disable-warning=ExperimentalWarning --import tsx --test server/promScraper.test.ts`
 Expected: FAIL — `Cannot find module './promScraper'`.
 
-- [ ] **Step 3: Write the implementation**
+- [ ] **Step 4: Write the implementation**
 
 Create `server/promScraper.ts`:
 
@@ -1941,7 +2005,7 @@ export function stop(): void {
 }
 ```
 
-- [ ] **Step 4: Delete the old poller and run the tests**
+- [ ] **Step 5: Delete the old poller and run the tests**
 
 ```bash
 git rm server/metricsPoller.ts
@@ -1950,10 +2014,10 @@ node --disable-warning=ExperimentalWarning --import tsx --test server/promScrape
 
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add server/promScraper.ts server/promScraper.test.ts
+git add server/types.ts server/promScraper.ts server/promScraper.test.ts
 git commit -m "feat: Prometheus scraper replaces the MTPLX metrics poller"
 ```
 
@@ -1962,58 +2026,16 @@ git commit -m "feat: Prometheus scraper replaces the MTPLX metrics poller"
 ## Task 8: Payload and server wiring
 
 **Files:**
-- Modify: `server/types.ts`, `server/server.ts`
+- Modify: `server/server.ts`, `server/db.ts`
 
 **Interfaces:**
 - Produces: the `StatePayload` shape consumed by all four pages.
 
-**Background you need:** `types.ts` is currently almost entirely MTPLX record shapes; nearly all of it goes. `StatePayload` keeps being sent whole on every snapshot and tick (no diffing) per the project's standing convention.
+**Background you need:** `types.ts` was already rewritten in Task 7 (controller ruling R2 — the scraper's `getSnapshot()` returns the new `StatePayload`, so the type had to exist first). This task is server wiring only.
 
 `/api/history/series` must keep its `Object.hasOwn` rejection — the reason is unchanged and is a real one (`in` walks the prototype chain, so `?names=constructor` would slip past and reach SQL). `/api/history/gauges` takes dynamic names because they are bound as parameters, and it now needs a `target` parameter and a discovery endpoint so the UI can populate a series picker without a hardcoded list.
 
-- [ ] **Step 1: Rewrite `server/types.ts`**
-
-Delete `MetricsRecord`, `ToolParseCounters`, `MtplxMetricsResponse`, `HealthResponse`, `LogEntry` and the `log` block of `StatePayload`. Keep `RingBuffers`. Replace `StatePayload`:
-
-```ts
-import type { PersistStatus } from './db';
-
-export interface RingBuffers {
-  decode: (number | null)[];
-  prefill: (number | null)[];
-  ttft: (number | null)[];
-  accept: (number | null)[];
-}
-
-/** Single payload shape for both the initial SSE 'snapshot' and every later
- *  'tick'. Sent in full, never diffed — broadcasts only happen on genuine
- *  change, so the payload size is not the bottleneck. */
-export interface StatePayload {
-  targetId: string | null;
-  targetLabel: string | null;
-  /** Whether the last /metrics scrape succeeded. */
-  scrapeOk: boolean;
-  /** Capture-proxy forward-path health. Always null in Phase 1 — there is no
-   *  proxy yet. The two are independent: a failed scrape says nothing about
-   *  whether inference is serving. */
-  upstreamOk: boolean | null;
-  lastOkAt: number | null;
-  lastChangeAt: number | null;
-  model: string | null;
-  version: string | null;
-  contextWindow: number | null;
-  /** Every current sample, keyed by the same series name used in the gauge
-   *  table, so the client never reimplements the parser. */
-  series: Record<string, number>;
-  /** Raw /v1/status body, for the queue and memory cards. */
-  status: unknown;
-  rings: RingBuffers;
-  ringSize: number;
-  persist: PersistStatus;
-}
-```
-
-- [ ] **Step 2: Rewire `server/server.ts`**
+- [ ] **Step 1: Rewire `server/server.ts`**
 
 Swap the imports (`./promScraper` for `./metricsPoller`), pass `transcriptRetentionDays` into `createStore`, add `target` to the history handlers, add the discovery endpoint, and simplify startup now that `healthPoller` no longer establishes the run:
 
@@ -2076,23 +2098,7 @@ app.get('/api/history/gauge-names', (req, res) => {
 });
 ```
 
-Add the backing method to `db.ts`'s `Store`:
-
-```ts
-  gaugeNames(targetId: string): string[] {
-    if (!this.db) return [];
-    try {
-      return (
-        this.db
-          .prepare('SELECT DISTINCT series FROM gauge WHERE target_id = ? ORDER BY series')
-          .all(targetId) as { series: string }[]
-      ).map(r => r.series);
-    } catch (err) {
-      this.fail('gaugeNames', err);
-      return [];
-    }
-  }
-```
+The backing `store.gaugeNames()` was implemented in Task 3 (controller ruling R1).
 
 Replace the startup chain. `healthPoller` no longer establishes a run, so the await-then-start ordering and the `shuttingDown` guard it protected are no longer needed — but `healthPoller` must still start first so the scraper's first `observe()` has `engine_type` and `context_window` available:
 
@@ -2103,7 +2109,7 @@ scraper.start(target, store);
 
 Update `shutdown()` to call `scraper.stop()` and `healthPoller.stop()`, and the boot log line to name the target.
 
-- [ ] **Step 3: Typecheck and run the whole suite**
+- [ ] **Step 2: Typecheck and run the whole suite**
 
 ```bash
 npm run typecheck
@@ -2112,7 +2118,7 @@ npm test
 
 Expected: typecheck clean, all suites pass. Fix any remaining references to deleted MTPLX types.
 
-- [ ] **Step 4: Verify against the real server**
+- [ ] **Step 3: Verify against the real server**
 
 ```bash
 npm run dev
@@ -2135,7 +2141,7 @@ sqlite3 data/history.db "SELECT target_id, started_at, model, version, kv_cache_
 
 Expected: a **single** `run` row (not one per second — if you see many, Task 4's `startedAt` guard regressed), `version` `0.13.4`, and a gauge row count far below `series × ticks` because unchanged series are skipped.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add server/types.ts server/server.ts server/db.ts
@@ -2439,9 +2445,9 @@ Keep both pages' CSS token blocks in sync with `index.html` per the standing con
 ```bash
 git rm -r patches
 git rm scripts/mtplx-postupgrade.sh
-git checkout -- patches 2>/dev/null || true
-rm -f patches/*.bak-260pinned scripts/*.bak-precoverage 2>/dev/null || true
 ```
+
+Controller ruling R4: the working tree is already clean — commit `da15677` preserved the in-progress patch edits and the `.bak` files in history before this plan started, precisely so this deletion loses nothing. If `git rm` reports local modifications, stop and tell the controller rather than forcing with `-f`.
 
 Remove the `mtplx:postupgrade` entry from `package.json` `scripts`, and update its `description` to describe a rapid-mlx dashboard.
 

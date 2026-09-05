@@ -68,3 +68,23 @@ test('a first-group block with no stamp after it is unknown, not guessed', () =>
   assert.equal(run.cycles[0].sourceId, null);
   assert.equal(run.cycles[0].attribution, 'unknown');
 });
+
+test('a heavy block before any stamp in the run is unknown, not guessed', () => {
+  // Symmetric to the light-branch case above, but for the heavy branch: a
+  // heavy-phase block whose precedingStampIndex is -1 because no source has
+  // been stamped yet anywhere in the parsed text. This is reachable in
+  // production, not just a malformed-log edge case — dreamIngest parses the
+  // log from a stored byte offset, so a parse can legitimately start
+  // mid-run, and the first block it sees may be a heavy block with no
+  // preceding stamp in the parsed text.
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    '[dream-nightly] cycling sources: default calendar',
+    'Dream cycle (partial) in 812.4s:',
+    '  ✓ extract_atoms  found 3 atoms',
+  ].join('\n');
+  const [run] = parseDreamLog(text).runs;
+  attributeRun(run);
+  assert.equal(run.cycles[0].sourceId, null);
+  assert.equal(run.cycles[0].attribution, 'unknown');
+});

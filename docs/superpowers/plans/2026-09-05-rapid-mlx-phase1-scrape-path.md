@@ -1238,7 +1238,15 @@ git commit -m "feat: schema v2 for rapid-mlx, with set-aside instead of migratio
   - `interface RunTrackerDeps { targetId: string; store: Pick<Store, 'upsertRun'> }`
   - `class RunTracker` with `observe(scrape: PromScrape, health: unknown, contextWindow: number | null, now: number): void`, `getRunId(): number | null`, `getModel(): string | null`, `getVersion(): string | null`, `didRestart(): boolean`
 
-**Background you need — read this carefully, it is the subtlest part of Phase 1.** rapid-mlx has no pid and no start timestamp. The only exact restart signal is `rapid_mlx_uptime_seconds` decreasing between scrapes.
+**Background you need — read this carefully, it is the subtlest part of Phase 1.** rapid-mlx has no pid and no start timestamp, so a restart must be inferred from `rapid_mlx_uptime_seconds`.
+
+A bare "uptime went down" test is not enough, and controller ruling R9 amends this task accordingly. Consider: uptime reads 100 s, the dashboard's scrape then fails for two hours, and the server restarts at the start of that outage. The next successful scrape reads uptime 7200 — *greater* than 100 — so a decrease test sees nothing, and two hours of a brand-new process is attributed to the old run.
+
+The robust signal is the **derived origin**, `now - uptime * 1000`. Declare a restart when either:
+- uptime decreased since the last observation (the ordinary, immediate case), **or**
+- the derived origin lands more than 30 s *after* the previous successful observation — the process demonstrably started after we last looked, which is exactly the long-gap case above.
+
+30 s sits far above scrape jitter (milliseconds) and far below any real restart's jump. One false positive is accepted and documented: if the host sleeps and rapid-mlx measures uptime on a monotonic clock that excludes sleep, waking looks like an origin jump and mints one spurious run boundary. That costs an extra `run` row and splits one run in two — strictly better than the opposite failure, which silently merges two different processes into one run.
 
 The naive implementation recomputes `startedAt = now - uptime * 1000` on every scrape and upserts. That is a bug. `uptime_seconds` has millisecond precision (`3590.942`) and scrape timing jitters by a few ms, so the derived origin *wanders*, and the `UNIQUE(target_id, started_at)` index mints a brand-new `run` row roughly once per second. Compute `startedAt` **once**, at the moment a restart is detected (and once at first observation), then hold it until the next detection.
 
@@ -1321,6 +1329,32 @@ test('uptime going backwards starts a new run with a fresh origin', () => {
   assert.equal(store.calls[1].startedAt, 5_998_000);
   assert.equal(t.getRunId(), 2);
   assert.equal(t.didRestart(), true);
+});
+
+/* The case a bare uptime-decrease test cannot see: the restart happened during
+   an outage longer than the new uptime, so uptime comes back HIGHER. */
+test('a restart during a long scrape outage is still detected', () => {
+  const store = fakeStore();
+  const t = new RunTracker({ targetId: 'qwen', store });
+  t.observe(scrapeWithUptime(100), {}, 262144, 1_000_000);
+  assert.equal(store.calls.length, 1);
+
+  /* Server restarted at t=1_100_000; we only look again two hours later. */
+  t.observe(scrapeWithUptime(7200), {}, 262144, 8_300_000);
+  assert.equal(store.calls.length, 2, 'restart across the gap was missed');
+  assert.equal(store.calls[1].startedAt, 1_100_000);
+  assert.equal(t.didRestart(), true);
+});
+
+/* The mirror case: the same long outage with NO restart must not invent one. */
+test('a long scrape outage without a restart creates no new run', () => {
+  const store = fakeStore();
+  const t = new RunTracker({ targetId: 'qwen', store });
+  t.observe(scrapeWithUptime(100), {}, 262144, 1_000_000);
+  /* Ran continuously, so the origin stays at 900_000 either way. */
+  t.observe(scrapeWithUptime(7300), {}, 262144, 8_200_000);
+  assert.equal(store.calls.length, 1);
+  assert.equal(t.didRestart(), false);
 });
 
 test('didRestart is false on a steady scrape', () => {
@@ -1423,6 +1457,11 @@ function anyLabel(scrape: PromScrape, name: string, key: string): string | null 
   return null;
 }
 
+/** How far the derived origin must move before it counts as a restart rather
+ *  than clock or scrape jitter. Jitter moves it by milliseconds; a restart
+ *  moves it by the whole previous uptime. */
+const RESTART_EPSILON_MS = 30_000;
+
 export class RunTracker {
   private runId: number | null = null;
   private model: string | null = null;
@@ -1430,6 +1469,9 @@ export class RunTracker {
   /** Held stable between restarts — see the comment in observe(). */
   private startedAt: number | null = null;
   private prevUptimeS: number | null = null;
+  /** `now` of the last successful observation — the reference the origin test
+   *  compares against, so it holds across arbitrarily long scrape outages. */
+  private lastObservedAt: number | null = null;
   private restarted = false;
 
   constructor(private readonly deps: RunTrackerDeps) {}
@@ -1443,16 +1485,28 @@ export class RunTracker {
     this.version = build?.labels.version ?? this.version;
     this.model = build?.labels.model ?? this.model;
 
-    this.restarted = detectRestart(this.prevUptimeS, uptimeS);
+    const derivedStart = Math.round(now - uptimeS * 1000);
     const isFirst = this.startedAt === null;
+
+    /* Two independent restart signals (ruling R9). The decrease test catches
+       the ordinary case immediately. The origin test catches what the decrease
+       test cannot see at all: a restart during a scrape outage longer than the
+       new uptime, where uptime returns HIGHER than we last saw it. If the
+       process started after we last looked, it is a new process, whatever the
+       uptime says. */
+    const jumpedPastLastLook =
+      this.lastObservedAt !== null && derivedStart > this.lastObservedAt + RESTART_EPSILON_MS;
+    this.restarted = !isFirst && (detectRestart(this.prevUptimeS, uptimeS) || jumpedPastLastLook);
+
     this.prevUptimeS = uptimeS;
+    this.lastObservedAt = now;
 
     /* Derive the origin ONLY on first sight and on restart, then hold it.
        uptime_seconds carries ms precision and scrape timing jitters, so
        recomputing every poll would wander the origin by a few ms and the
        UNIQUE(target_id, started_at) index would mint a new run every second. */
     if (isFirst || this.restarted) {
-      this.startedAt = Math.round(now - uptimeS * 1000);
+      this.startedAt = derivedStart;
     } else {
       return; // steady state: the run already exists, nothing to write
     }
@@ -1489,7 +1543,7 @@ export class RunTracker {
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `node --disable-warning=ExperimentalWarning --import tsx --test server/runTracker.test.ts`
-Expected: PASS, 10 tests.
+Expected: PASS, 12 tests.
 
 The `uptime drift does not mint new runs` test is the one that matters. If it fails with `store.calls.length === 4`, the `startedAt` recompute guard is wrong.
 
@@ -2632,7 +2686,7 @@ git commit -m "chore: retire MTPLX artifacts, document the rapid-mlx architectur
 
 ## Done when
 
-- `npm test` passes: `promParse` (13), `promSeries` (15), `runTracker` (10), `targets` (5), `promScraper` (5), `db` (existing plus 8 new).
+- `npm test` passes: `promParse` (13), `promSeries` (15), `runTracker` (12), `targets` (5), `promScraper` (5), `db` (existing plus 8 new).
 - `npm run typecheck` and `npm run build` are clean.
 - The dashboard shows live throughput, memory, queue, prefix-cache and outcome data against the real `:8000` server.
 - Exactly one `run` row exists after several minutes of uptime.

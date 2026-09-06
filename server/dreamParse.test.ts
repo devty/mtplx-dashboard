@@ -275,12 +275,12 @@ test('the import-progress block and operator markers are known noise', () => {
     '  1095 pages skipped (1095 unchanged, 0 errors)',
     '  4210 chunks created',
     '  Deleted un-syncable page: package-json',
-    '[sync] chunker_version gate: stored=4, current=5. Forcing full re-chunk pass.',
-    '[sync] last_commit e1cbe4bd not an ancestor of HEAD (history rewritten)',
+    '[sync] chunker_version gate: stored=4, current=5. Forcing full re-chunk pass (git HEAD unchanged but pipeline version advanced).',
+    '[sync] last_commit e1cbe4bd not an ancestor of HEAD (history rewritten) — diffing tree-to-tree against the orphaned bookmark; advancing to HEAD on completion.',
     '[dream-nightly:fullsync] default: 12 file(s) imported',
     '[dream-nightly:worker] worker exited rc=1 — respawning in 5s',
-    'Skipped 29 candidate(s) whose target page exists only in another source.',
-    'Skipped 12 cross-source candidate(s) — target exists only in another source.',
+    'Skipped 29 candidate(s) whose target page exists only in another source (cross-source edges are not written — see docs/architecture/brains-and-sources.md).',
+    'Skipped 12 cross-source candidate(s) — target exists only in another source. Enable with `gbrain config set link_resolution.cross_source true`, then run `gbrain extract links --source db` — a --stale re-run will NOT revisit these pages (their extraction watermark is already stamped) — see docs/architecture/brains-and-sources.md (#2589).',
     '=== marker: manual post-merge run ===',
     '===== RUN START 2026-08-19 10:32:17 | mtplx 2.8.3 | patterns oneshot =====',
     '[dream-nightly] === MANUAL RUN started Mon Aug 24 12:39:57 EDT 2026 (catch-up) ===',
@@ -299,4 +299,49 @@ test('a drifted import line is still drift, not swallowed by a stem', () => {
     ].join('\n')
   );
   assert.equal(r.unrecognisedCount, 4);
+});
+
+test('a changed tail under an already-known gate still trips the canary', () => {
+  /* F1's review finding: four NOISE entries closed the prefix but not the
+     line end, so a materially different message appended after a known,
+     fixed prefix was absorbed as noise instead of tripping the drift
+     canary. This pins the fix: the real message (fully spelled out) stays
+     noise, but the same prefix followed by something new does not. */
+  const families: Array<{ real: string; drifted: string }> = [
+    {
+      real: 'Skipped 29 candidate(s) whose target page exists only in another source (cross-source edges are not written — see docs/architecture/brains-and-sources.md).',
+      drifted:
+        'Skipped 29 candidate(s) whose target page exists only in another source. SOMETHING ENTIRELY NEW AND ALARMING HAPPENED',
+    },
+    {
+      real: 'Skipped 12 cross-source candidate(s) — target exists only in another source. Enable with `gbrain config set link_resolution.cross_source true`, then run `gbrain extract links --source db` — a --stale re-run will NOT revisit these pages (their extraction watermark is already stamped) — see docs/architecture/brains-and-sources.md (#2589).',
+      drifted:
+        'Skipped 12 cross-source candidate(s) — target exists only in another source. SOMETHING ENTIRELY NEW AND ALARMING HAPPENED',
+    },
+    {
+      real: '[sync] chunker_version gate: stored=4, current=5. Forcing full re-chunk pass (git HEAD unchanged but pipeline version advanced).',
+      drifted:
+        '[sync] chunker_version gate: stored=4, current=5. SOMETHING ENTIRELY NEW AND ALARMING HAPPENED',
+    },
+    {
+      real: '[sync] last_commit e1cbe4bd not an ancestor of HEAD (history rewritten) — diffing tree-to-tree against the orphaned bookmark; advancing to HEAD on completion.',
+      drifted: '[sync] last_commit e1cbe4bd not an ancestor of HEAD (history rewritten) SOMETHING ENTIRELY NEW AND ALARMING HAPPENED',
+    },
+  ];
+
+  for (const { real, drifted } of families) {
+    const clean = parseDreamLog(
+      ['[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting', real].join('\n')
+    );
+    assert.equal(clean.unrecognisedCount, 0, `the real message stays noise: ${real}`);
+
+    const dirty = parseDreamLog(
+      ['[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting', drifted].join('\n')
+    );
+    assert.equal(
+      dirty.unrecognisedCount,
+      1,
+      `a changed tail under the same known prefix must trip the canary: ${drifted}`
+    );
+  }
 });

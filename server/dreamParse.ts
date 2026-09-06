@@ -154,8 +154,8 @@ const NOISE = [
      Two wordings, both from the cross-source rule; each is spelled out rather
      than reduced to a shared `^Skipped \d+` stem, which would also swallow
      wordings nobody has read. */
-  /^Skipped \d+ candidate\(s\) whose target page exists only in another source/,
-  /^Skipped \d+ cross-source candidate\(s\) — target exists only in another source/,
+  /^Skipped \d+ candidate\(s\) whose target page exists only in another source \(cross-source edges are not written — see docs\/architecture\/brains-and-sources\.md\)\.$/,
+  /^Skipped \d+ cross-source candidate\(s\) — target exists only in another source\. Enable with `gbrain config set link_resolution\.cross_source true`, then run `gbrain extract links --source db` — a --stale re-run will NOT revisit these pages \(their extraction watermark is already stamped\) — see docs\/architecture\/brains-and-sources\.md \(#2589\)\.$/,
   // Lock contention: another cycle already held the per-source lock.
   /^Skipped: another cycle is already running\./,
   /* A `gbrain import` running under the dream prints its own progress block.
@@ -171,8 +171,8 @@ const NOISE = [
   /^ {2}\d+ chunks created$/,
   /^ {2}Deleted un-syncable page: \S+$/,
   // Sync-planner gates: why this pass chose a full re-chunk / tree diff.
-  /^\[sync\] chunker_version gate: stored=\d+, current=\d+\./,
-  /^\[sync\] last_commit \S+ not an ancestor of HEAD\b/,
+  /^\[sync\] chunker_version gate: stored=\d+, current=\d+\. Forcing full re-chunk pass \(git HEAD unchanged but pipeline version advanced\)\.$/,
+  /^\[sync\] last_commit \S+ not an ancestor of HEAD \(history rewritten\) — diffing tree-to-tree against the orphaned bookmark; advancing to HEAD on completion\.$/,
   /* Operator annotations around hand-run invocations. They mark a manual run,
      they are not one: the run itself still opens on its own `starting` line, so
      skipping these loses nothing the run record does not already hold. */

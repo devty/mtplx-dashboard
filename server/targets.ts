@@ -6,7 +6,8 @@ export interface Target {
   proxyPort: number | null;
 }
 
-const DEFAULT_TARGETS = 'qwen=http://127.0.0.1:8000:8010';
+const DEFAULT_TARGETS =
+  'qwen=http://127.0.0.1:8000:8010|Qwen3.6-35B-A3B,gemma=http://127.0.0.1:8087:8011|gemma-4-26B';
 
 const PORT_MIN = 1;
 const PORT_MAX = 65535;

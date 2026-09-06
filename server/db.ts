@@ -134,12 +134,59 @@ export interface RequestRow {
 
 /** Every method here has a production caller. Test-only introspection belongs
  *  in the test file's own read connection, not on this interface. */
+
+export interface RequestSummary {
+  requestId: string; ts: number; model: string | null;
+  promptTokens: number | null; completionTokens: number | null;
+  ttftS: number | null; requestElapsedS: number | null; decodeTokS: number | null;
+  clientLabel: string | null; toolCallCount: number | null; userPreview: string | null;
+  outcome: string | null; statusCode: number | null; streamed: boolean;
+  finishReason: string | null; engineJoined: boolean; targetId: string;
+}
+
+export interface RequestDetail extends RequestSummary {
+  runId: number | null;
+  messages: string | null; responseText: string | null; tools: string | null;
+  truncated: boolean;
+  /** Distinguishes "aged out after TRANSCRIPT_RETENTION_DAYS" from "never
+   *  captured" — a streamed request has a row but never has a transcript. */
+  transcriptPresent: boolean;
+}
+
+const REQUEST_COLUMNS = `
+  request_id, target_id, ts, model, prompt_tokens, completion_tokens, ttft_s,
+  request_elapsed_s, decode_tok_s, client_label, tool_call_count,
+  user_preview, outcome, status_code, streamed, finish_reason, engine_joined`;
+
+interface RawRequestRow {
+  request_id: string; target_id: string; ts: number; model: string | null;
+  prompt_tokens: number | null; completion_tokens: number | null;
+  ttft_s: number | null; request_elapsed_s: number | null; decode_tok_s: number | null;
+  client_label: string | null; tool_call_count: number | null; user_preview: string | null;
+  outcome: string | null; status_code: number | null; streamed: number | null;
+  finish_reason: string | null; engine_joined: number | null;
+}
+
+function toSummary(r: RawRequestRow): RequestSummary {
+  return {
+    requestId: r.request_id, targetId: r.target_id, ts: r.ts, model: r.model,
+    promptTokens: r.prompt_tokens, completionTokens: r.completion_tokens,
+    ttftS: r.ttft_s, requestElapsedS: r.request_elapsed_s, decodeTokS: r.decode_tok_s,
+    clientLabel: r.client_label, toolCallCount: r.tool_call_count,
+    userPreview: r.user_preview, outcome: r.outcome, statusCode: r.status_code,
+    streamed: r.streamed === 1, finishReason: r.finish_reason,
+    engineJoined: r.engine_joined === 1,
+  };
+}
+
 export interface Store {
   status(): PersistStatus;
   upsertRun(info: RunInfo, now: number, opts?: { adopt?: boolean }): number | null;
   queryRuns(limit: number): RunSummary[];
   getRun(id: number): RunDetail | null;
   insertRequestRow(r: RequestRow): void;
+  queryRequests(targetId: string, limit: number, before: number | null): RequestSummary[];
+  getRequest(requestId: string): RequestDetail | null;
   insertTranscript(
     requestId: string,
     messages: string | null,
@@ -660,6 +707,50 @@ class SqliteStore implements Store {
     } catch (err) {
       this.fail('bucketQuery', err);
       return [];
+    }
+  }
+
+
+  queryRequests(targetId: string, limit: number, before: number | null): RequestSummary[] {
+    if (!this.db) return [];
+    try {
+      const rows = (before === null
+        ? this.db.prepare(`SELECT ${REQUEST_COLUMNS} FROM request WHERE target_id = ? ORDER BY ts DESC LIMIT ?`).all(targetId, limit)
+        : this.db.prepare(`SELECT ${REQUEST_COLUMNS} FROM request WHERE target_id = ? AND ts < ? ORDER BY ts DESC LIMIT ?`).all(targetId, before, limit)
+      ) as unknown as RawRequestRow[];
+      return rows.map(toSummary);
+    } catch (err) {
+      this.fail('queryRequests', err);
+      return [];
+    }
+  }
+
+  getRequest(requestId: string): RequestDetail | null {
+    if (!this.db) return null;
+    try {
+      /* LEFT JOIN, never INNER: transcripts age out on their own retention
+         while the request row lives three times longer, so an absent
+         transcript is the normal case, not a missing request. */
+      const row = this.db.prepare(
+        `SELECT ${REQUEST_COLUMNS}, request.run_id AS run_id,
+                transcript.messages AS messages, transcript.response_text AS response_text,
+                transcript.tools AS tools, transcript.truncated AS truncated,
+                transcript.request_id IS NOT NULL AS transcript_present
+           FROM request LEFT JOIN transcript USING (request_id)
+          WHERE request.request_id = ?`
+      ).get(requestId) as (RawRequestRow & {
+        run_id: number | null; messages: string | null; response_text: string | null;
+        tools: string | null; truncated: number | null; transcript_present: number;
+      }) | undefined;
+      if (!row) return null;
+      return {
+        ...toSummary(row), runId: row.run_id, messages: row.messages,
+        responseText: row.response_text, tools: row.tools,
+        truncated: row.truncated === 1, transcriptPresent: row.transcript_present === 1,
+      };
+    } catch (err) {
+      this.fail('getRequest', err);
+      return null;
     }
   }
 

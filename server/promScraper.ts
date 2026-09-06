@@ -7,6 +7,7 @@ import { RunTracker } from './runTracker';
 import * as healthPoller from './healthPoller';
 import type { Store } from './db';
 import type { Target } from './targets';
+import type { EngineJoin } from './engineJoin';
 import type { RingBuffers, StatePayload } from './types';
 
 /* These start EMPTY on every dashboard restart, and that is structural, not a
@@ -21,6 +22,9 @@ const counters = new CounterState();
 const lastPersisted = new Map<string, number | null>();
 
 let target: Target | null = null;
+let join: EngineJoin | null = null;
+let upstreamOk: boolean | null = null;
+let lastRequestAt: number | null = null;
 let store: Store | null = null;
 let runTracker: RunTracker | null = null;
 let scrape: PromScrape | null = null;
@@ -173,9 +177,15 @@ async function pollOnce(): Promise<void> {
     if (runTracker?.didRestart()) {
       counters.reset();
       lastPersisted.clear();
+      /* Waiters registered before the restart belong to the dead process. */
+      join?.abandon();
     }
 
     const d = deriveSamples(s, counters);
+    /* Settle only on a successful scrape — settling on failure would age
+       waiters out during an outage that has nothing to do with them. The
+       wall-clock fallback in EngineJoin covers that case instead. */
+    join?.settle(d.completedDelta, { ttftS: d.ttft, decodeTokS: d.decode });
     let changed = false;
     if (d.decode !== null || d.ttft !== null) {
       pushRing(rings.decode, d.decode);
@@ -229,7 +239,7 @@ export function getSnapshot(): StatePayload {
     scrapeOk,
     /* Phase 1 has no proxy, so there is nothing to report about the forward
        path. Phase 2 replaces this with the real listener state. */
-    upstreamOk: null,
+    upstreamOk,
     lastOkAt,
     lastChangeAt,
     model: runTracker?.getModel() ?? null,
@@ -237,6 +247,7 @@ export function getSnapshot(): StatePayload {
     contextWindow: healthPoller.getContextWindow(),
     series: currentSeries(),
     status: healthPoller.getStatus(),
+    lastRequestAt,
     rings: {
       decode: [...rings.decode],
       prefill: [...rings.prefill],
@@ -248,7 +259,19 @@ export function getSnapshot(): StatePayload {
   };
 }
 
-export function start(t: Target, s: Store): void {
+export function setUpstreamOk(ok: boolean): void {
+  if (ok === upstreamOk) return;
+  upstreamOk = ok;
+  broadcastTick(getSnapshot());
+}
+
+export function noteRequest(ts: number): void {
+  lastRequestAt = ts;
+  broadcastTick(getSnapshot());
+}
+
+export function start(t: Target, s: Store, j?: EngineJoin): void {
+  join = j ?? null;
   target = t;
   store = s;
   runTracker = new RunTracker({ targetId: t.id, store: s });
@@ -256,7 +279,12 @@ export function start(t: Target, s: Store): void {
   void pollOnce();
 }
 
+export function getRunId(): number | null {
+  return runTracker?.getRunId() ?? null;
+}
+
 export function stop(): void {
+  join?.abandon();
   stopped = true;
   if (pollTimer) clearTimeout(pollTimer);
 }

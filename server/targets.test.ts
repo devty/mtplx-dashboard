@@ -2,12 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseTargets } from './targets';
 
-test('defaults to a single qwen target on :8000', () => {
+/* The default now covers BOTH live rapid-mlx backends, so a fresh install
+   proxies the whole fleet rather than half of it. */
+test('defaults to both backends, each with its own proxy port', () => {
   const t = parseTargets({});
-  assert.equal(t.length, 1);
-  assert.deepEqual(t[0], {
-    id: 'qwen', label: 'qwen', upstreamUrl: 'http://127.0.0.1:8000', proxyPort: 8010,
-  });
+  assert.deepEqual(t, [
+    { id: 'qwen', label: 'Qwen3.6-35B-A3B', upstreamUrl: 'http://127.0.0.1:8000', proxyPort: 8010 },
+    { id: 'gemma', label: 'gemma-4-26B', upstreamUrl: 'http://127.0.0.1:8087', proxyPort: 8011 },
+  ]);
 });
 
 test('parses several targets with labels', () => {
@@ -46,8 +48,7 @@ function captureWarnings(fn: () => void): string[] {
 test('falls back to the default when every entry is malformed, and says so', () => {
   let t: ReturnType<typeof parseTargets> = [];
   const warnings = captureWarnings(() => { t = parseTargets({ RAPID_MLX_TARGETS: 'garbage,,=,x=' }); });
-  assert.equal(t.length, 1);
-  assert.equal(t[0].id, 'qwen');
+  assert.deepEqual(t.map(x => x.id), ['qwen', 'gemma']);
   assert.ok(warnings.some(w => w.includes('falling back')), 'fallback was silent');
 });
 

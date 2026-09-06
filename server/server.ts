@@ -5,10 +5,12 @@ import { createStore, REQUEST_SERIES } from './db';
 import * as scraper from './promScraper';
 import * as healthPoller from './healthPoller';
 import * as sse from './sse';
+import * as proxy from './proxy';
+import { EngineJoin } from './engineJoin';
 
 const app = express();
 
-const target = config.targets[0]; // Phase 1 is single-target
+const target = config.targets[0]; // the scraper is still single-target
 
 const store = createStore({
   path: path.isAbsolute(config.dbPath)
@@ -108,6 +110,20 @@ app.get('/api/history/gauge-names', (req, res) => {
   res.json({ target: t, names: store.gaugeNames(t) });
 });
 
+app.get('/api/requests', (req, res) => {
+  const q = req.query as Record<string, unknown>;
+  const rawLimit = Number.parseInt(String(q.limit ?? ''), 10);
+  const limit = Number.isFinite(rawLimit) ? Math.min(200, Math.max(1, rawLimit)) : 50;
+  const rawBefore = Number.parseInt(String(q.before ?? ''), 10);
+  res.json({ requests: store.queryRequests(queryTarget(q), limit, Number.isFinite(rawBefore) ? rawBefore : null) });
+});
+
+app.get('/api/requests/:id', (req, res) => {
+  const detail = store.getRequest(req.params.id);
+  if (!detail) { res.status(404).json({ error: 'request not found' }); return; }
+  res.json(detail);
+});
+
 app.get('/api/history/runs', (req, res) => {
   const raw = Number.parseInt(String(req.query.limit ?? ''), 10);
   const limit = Number.isFinite(raw) ? Math.min(100, Math.max(1, raw)) : 20;
@@ -143,8 +159,29 @@ const server = app.listen(config.port, () => {
    this .then() callback start the scraper anyway, after the server believes
    it has already shut down. */
 let shuttingDown = false;
+const join = new EngineJoin();
+
 void healthPoller.start(target).then(() => {
-  if (!shuttingDown) scraper.start(target, store);
+  if (shuttingDown) return;
+  scraper.start(target, store, join);
+
+  /* One capture proxy per configured target. The engine join is only available
+     for the scraped target — the others record everything the wire shows
+     (id, prompt, response, tokens, elapsed) with engineJoined false rather
+     than stalling each row on a claim that nothing will ever settle. */
+  if (config.captureEnabled) {
+    for (const t of config.targets) {
+      proxy.start({
+        target: t,
+        store,
+        join,
+        joinEnabled: t.id === target.id,
+        runId: () => (t.id === target.id ? scraper.getRunId() : null),
+        onCaptured: (_id, ts) => scraper.noteRequest(ts),
+        onUpstream: (_id, ok) => scraper.setUpstreamOk(ok),
+      });
+    }
+  }
 });
 
 const heartbeat = sse.startHeartbeat();
@@ -153,6 +190,7 @@ store.prune(Date.now()); // one prune at boot, so a long downtime is cleaned up 
 
 function shutdown(): void {
   shuttingDown = true;
+  proxy.stop();
   clearInterval(heartbeat);
   clearInterval(pruneTimer);
   scraper.stop();

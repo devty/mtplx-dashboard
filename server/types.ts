@@ -29,6 +29,8 @@ export interface StatePayload {
   series: Record<string, number>;
   /** Raw /v1/status body, for the queue and memory cards. */
   status: unknown;
+  /** Wall-clock ms of the most recent captured request. */
+  lastRequestAt: number | null;
   rings: RingBuffers;
   ringSize: number;
   persist: PersistStatus;

@@ -38,4 +38,9 @@ export const config = Object.freeze({
   healthIntervalMs: int('HEALTH_INTERVAL_MS', 5000),
   /** Gauges persist far slower than they are scraped — see Task 7. */
   gaugePersistIntervalMs: int('GAUGE_PERSIST_INTERVAL_MS', 10000),
+  /** Escape hatch: false unbinds every proxy listener and returns the dashboard
+   *  to scrape-only behaviour without a code change. */
+  captureEnabled: bool('CAPTURE_ENABLED', true),
+  /** Per-field cap on stored transcript bodies. Counted in BYTES. */
+  transcriptMaxBytes: int('TRANSCRIPT_MAX_BYTES', 262144),
 });

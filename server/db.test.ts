@@ -1023,6 +1023,64 @@ test('nested item failures survive the round trip', () => {
   cleanup();
 });
 
+test('a failed phase and its error code survive the round trip', () => {
+  const { store, cleanup } = tmpStore();
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    '[dream-nightly] cycling sources: default',
+    '[dream-nightly] stamped last_full_cycle_at for default',
+    'Dream cycle (partial) in 812.4s:',
+    '  ✓ consolidate  promoted 0 facts',
+    "  ✗ patterns  pattern-detection subagent job 10701 ended 'dead'; nothing was written",
+    "      [InternalError/PATTERNS_CHILD_DEAD] subagent job 10701 outcome 'dead'",
+  ].join('\n');
+  const [run] = parseDreamLog(text).runs;
+  attributeRun(run);
+  const id = store.insertDreamRun(run, null, 'none');
+  store.upsertDreamNight('2026-09-05', 0, id, 'ok');
+
+  const phases = store.getDreamNight('2026-09-05')!.phases;
+  const failed = phases.find((p) => p.phase === 'patterns');
+  assert.equal(failed?.mark, 'failed');
+  assert.match(failed!.text, /ended 'dead'/);
+  assert.equal(failed?.failureCount, 0, 'a phase abort is not an item failure');
+  assert.equal(failed?.failuresJson, null);
+  assert.equal(JSON.parse(failed!.errorsJson!)[0].code, 'InternalError/PATTERNS_CHILD_DEAD');
+
+  // A phase that simply ran carries no errors column.
+  assert.equal(phases.find((p) => p.phase === 'consolidate')?.errorsJson, null);
+  cleanup();
+});
+
+test('a failed phase inside the global pass keeps its global scope', () => {
+  const { store, cleanup } = tmpStore();
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    '[dream-nightly] cycling sources: default',
+    'Dream cycle (partial) in 1.4s:',
+    '  ✓ lint  0 fix(es) applied',
+    '[dream-nightly] stamped last_full_cycle_at for default',
+    '[dream-nightly] global pass (brain-wide phases, once)',
+    'Dream cycle (partial) in 9424.8s:',
+    '  ✗ calibration_profile  calibration_profile failed: Not found',
+    '      [InternalError/CALIBRATION_PROFILE_UNKNOWN] Not found',
+    '[dream-nightly] global pass ok',
+  ].join('\n');
+  const [run] = parseDreamLog(text).runs;
+  attributeRun(run);
+  const id = store.insertDreamRun(run, null, 'none');
+  store.upsertDreamNight('2026-09-05', 0, id, 'ok');
+
+  const calib = store
+    .getDreamNight('2026-09-05')!
+    .phases.find((p) => p.phase === 'calibration_profile');
+  assert.equal(calib?.mark, 'failed');
+  assert.equal(calib?.scope, 'global');
+  assert.equal(calib?.sourceId, null);
+  assert.equal(calib?.attribution, 'stamped');
+  cleanup();
+});
+
 test('ingest offset round-trips and defaults to zero', () => {
   const { store, cleanup } = tmpStore();
   assert.equal(store.dreamIngestOffset(), 0);

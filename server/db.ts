@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { DreamRunRecord, DreamAttribution, DreamCycleScope, DreamTermination } from './dreamParse';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export type DreamCommitSource = 'log' | 'git' | 'both' | 'none' | 'unavailable';
 export type DreamNightStatus = 'ok' | 'warned' | 'truncated' | 'missed' | 'unknown';
@@ -25,10 +25,18 @@ export interface DreamPhaseRow {
    *  unattributed either — see dreamAttribute.ts. */
   scope: DreamCycleScope;
   phase: string;
+  /** One of DreamMark. TEXT in the database and a string here so a mark this
+   *  build has never heard of round-trips instead of failing the write — the
+   *  page falls back to rendering the raw value. */
   mark: string;
   text: string;
+  /** Items that failed INSIDE a phase that otherwise ran: `[{slug, message}]`. */
   failureCount: number;
   failuresJson: string | null;
+  /** Why the phase ITSELF aborted: `[{code, detail}]`, present only beside a
+   *  `failed` mark. Kept in its own column rather than merged into
+   *  failures_json — see DreamPhaseError in dreamParse.ts. */
+  errorsJson: string | null;
 }
 
 export interface DreamNightDetail {
@@ -302,7 +310,8 @@ const DDL = `
     scope         TEXT    NOT NULL DEFAULT 'source',
     raw_text      TEXT    NOT NULL,
     failure_count INTEGER NOT NULL DEFAULT 0,
-    failures_json TEXT
+    failures_json TEXT,
+    errors_json   TEXT
   );
   CREATE INDEX IF NOT EXISTS dream_phase_run ON dream_phase(run_id);
 
@@ -838,8 +847,9 @@ class SqliteStore implements Store {
       );
       const insPhase = this.db.prepare(
         `INSERT INTO dream_phase
-           (run_id, cycle_id, source_id, phase, mark, scope, raw_text, failure_count, failures_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           (run_id, cycle_id, source_id, phase, mark, scope, raw_text, failure_count,
+            failures_json, errors_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
 
       for (const cycle of run.cycles) {
@@ -861,7 +871,8 @@ class SqliteStore implements Store {
             cycle.scope,
             p.text,
             p.failures.length,
-            p.failures.length ? JSON.stringify(p.failures) : null
+            p.failures.length ? JSON.stringify(p.failures) : null,
+            p.errors.length ? JSON.stringify(p.errors) : null
           );
         }
       }
@@ -975,6 +986,7 @@ class SqliteStore implements Store {
             .prepare(
               `SELECT source_id AS sourceId, phase, mark, scope, raw_text AS text,
                       failure_count AS failureCount, failures_json AS failuresJson,
+                      errors_json AS errorsJson,
                       (SELECT attribution FROM dream_source_cycle c WHERE c.id = p.cycle_id)
                         AS attribution
                  FROM dream_phase p WHERE p.run_id = ? ORDER BY p.id`

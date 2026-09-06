@@ -129,7 +129,15 @@ h2 {
 .mark-ran     { color: var(--s2); font-weight: 600; }
 .mark-noop    { color: var(--s3); font-weight: 600; }
 .mark-skipped { opacity: 0.5; }
+/* A phase that failed outright. Red and heavier than mark-noop's amber `!`,
+   which means the opposite thing — ran fine, had nothing to apply. */
+.mark-failed  { color: var(--critical); font-weight: 800; }
 .fail { color: var(--critical); font-size: 11.5px; margin: 2px 0 2px 18px; }
+/* The phase's own abort, and the [Class/CODE] line under it. Indented less
+   than .fail so a whole-phase failure does not read as one item's failure. */
+.pfail { color: var(--critical); font-size: 12px; font-weight: 600; margin: 4px 0 0 4px; }
+.perr  { color: var(--ink-2); font-size: 11.5px; margin: 1px 0 2px 18px; }
+.perr code { font: 11px ui-monospace, Menlo, monospace; color: var(--critical); }
 
 .run-meta { font-size: 12.5px; color: var(--ink-2); margin: 4px 0 12px; }
 .run-meta code { font: 11.5px ui-monospace, Menlo, monospace; }
@@ -173,6 +181,16 @@ footer { margin-top: 22px; font-size: 11.5px; color: var(--muted); text-align: c
 const $ = (id) => document.getElementById(id);
 const esc = (s) => (s == null ? '' : String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])));
 const fmt = (ms) => (ms ? new Date(ms).toLocaleString() : '—');
+/* Log-derived JSON. A malformed column must cost that one detail line, not the
+   whole page — nothing here is worth taking the view down for. */
+const arr = (json) => {
+  try { const v = JSON.parse(json || '[]'); return Array.isArray(v) ? v : []; }
+  catch { return []; }
+};
+/* `failed` is the phase's own verdict; `noop` (`!`) is the opposite — it ran
+   and had nothing to apply. A mark this build does not know renders `?` rather
+   than borrowing another mark's glyph and asserting something untrue. */
+const SYMBOL = { ran: '✓', failed: '✗', noop: '!', skipped: '−' };
 
 async function load() {
   let payload;
@@ -235,6 +253,16 @@ async function detail(date) {
   if (r.globalPassRc !== null) head += ' · global pass rc=' + esc(String(r.globalPassRc));
   head += '</div>';
 
+  /* A run can exit 0 with a phase dead inside it — that is the whole point of
+     this callout. Without it such a night reads as clean, which is the view's
+     governing rule inverted. Derived from the phases already on screen; it
+     invents no status and changes no stored one. */
+  const failed = d.phases.filter((p) => p.mark === 'failed');
+  if (failed.length)
+    head += '<div class="run-meta"><b class="callout">' + failed.length +
+            ' phase(s) failed outright: ' + esc(failed.map((p) => p.phase).join(', ')) +
+            '</b></div>';
+
   /* The parsed reading and the git cross-check can disagree — a run can commit
      without ever printing `done`. Show the disagreement; do not resolve it. */
   head += '<div class="run-meta">';
@@ -281,10 +309,16 @@ async function detail(date) {
     body += '&nbsp; ';
     body += g.phases.map((p) =>
       '<span class="mark-' + esc(p.mark) + '" title="' + esc(p.phase) + ': ' + esc(p.text) + '">' +
-      (p.mark === 'ran' ? '✓' : p.mark === 'noop' ? '!' : '−') + '</span>').join(' ');
+      esc(SYMBOL[p.mark] || '?') + '</span>').join(' ');
     body += '</div>';
     for (const p of g.phases) {
-      for (const f of JSON.parse(p.failuresJson || '[]'))
+      /* The phase's own abort first, then its classification, then any items
+         that failed inside it. Three different claims, three different rows. */
+      if (p.mark === 'failed')
+        body += '<div class="pfail">✗ ' + esc(p.phase) + ' — ' + esc(p.text) + '</div>';
+      for (const e of arr(p.errorsJson))
+        body += '<div class="perr"><code>' + esc(e.code) + '</code> ' + esc(e.detail) + '</div>';
+      for (const f of arr(p.failuresJson))
         body += '<div class="fail">✗ ' + esc(f.slug) + ': ' + esc(f.message) + '</div>';
     }
   }

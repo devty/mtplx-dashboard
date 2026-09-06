@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A realtime dashboard for a local rapid-mlx inference server (LLM inference
 on Apple Silicon, exposed as a standard Prometheus text-exposition `/metrics` endpoint). A small
 Node/TypeScript server (`server/`) scrapes that endpoint itself on an interval and pushes updates
-to connected browsers over Server-Sent Events. The four pages remain plain, framework-free
+to connected browsers over Server-Sent Events. The five pages remain plain, framework-free
 HTML/CSS/JS with everything inline:
 
 - `public/index.html` — metrics dashboard (throughput + memory + queue-depth hero, latency,
@@ -20,12 +20,17 @@ HTML/CSS/JS with everything inline:
   row, which no longer exists to link from.
 - `public/history.html` — run history & comparison (per-run config diff, gauge charts discovered
   from the scrape)
+- `public/dream.html` — gbrain nightly-dream health: a strip of recent nights (missed ones drawn
+  as dashed cells, because two of the failure modes it catches are absences), then per-source
+  phase marks, the global pass as its own row, and nested item failures. Fetch-on-load, no SSE —
+  the dream is a once-a-night batch. Unlike the other pages it reads no rapid-mlx data at all;
+  its source is `~/.gbrain/dream-nightly.log` plus a read-only `git log` cross-check.
 
 `index.html` connects to `GET /api/events` SSE and renders off a shared `StatePayload` shape (see
 `server/types.ts`). `log.html`/`detail.html` currently hold no SSE connection at all — there is
 nothing for them to subscribe to. `history.html` is fetch-on-load only and holds no SSE connection
 either (see Connection/offline handling below). There is still no shared JS *file* between any of
-the four pages, so rendering/formatting logic (not data acquisition — see below) remains
+the five pages, so rendering/formatting logic (not data acquisition — see below) remains
 hand-duplicated across them.
 
 **This phase (Phase 1 — scrape path) is single-target and read-only**: no capture proxy, no

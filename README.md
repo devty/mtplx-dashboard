@@ -111,10 +111,13 @@ npm start
 golden fixtures captured from live servers, including families that only appear after first
 traffic), series-name derivation and counter-delta/restart logic (`promSeries.ts`), run detection
 (`runTracker.ts`), target-list parsing (`targets.ts`), the scrape loop's per-interval derivations
-(`promScraper.ts`), and the SQLite persistence layer (`db.ts`) — the last against a throwaway
-on-disk file in a temp directory, not `:memory:`, because an in-memory database is private to the
-connection that opened it and the tests assert through a second read connection. There is no
-frontend test harness; verify page changes by loading them against a real rapid-mlx instance.
+(`promScraper.ts`), the SQLite persistence layer (`db.ts`), and the nightly-dream pipeline
+(`dreamParse.ts`, `dreamAttribute.ts`, `dreamSchedule.ts`, `dreamIngest.ts`, `dreamService.ts` —
+log parsing, source attribution, missed-night derivation, ingest and caching, against verbatim log
+excerpts in `server/fixtures/dream/`) — the storage tests against a throwaway on-disk file in a
+temp directory, not `:memory:`, because an in-memory database is private to the connection that
+opened it and the tests assert through a second read connection. There is no frontend test
+harness; verify page changes by loading them against a real rapid-mlx instance.
 
 ### Configuration
 

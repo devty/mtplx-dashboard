@@ -599,10 +599,10 @@ export class EngineJoin {
     return new Promise(resolve => {
       /* Bound the queue: a scraper that stops settling (upstream down, dashboard
          mid-restart) must not accumulate waiters for every request served. */
-      const oldest = this.waiters.shift.length >= 0 && this.waiters.length >= this.maxWaiters
-        ? this.waiters.shift()
-        : undefined;
-      if (oldest) this.finish(oldest, null);
+      if (this.waiters.length >= this.maxWaiters) {
+        const oldest = this.waiters.shift();
+        if (oldest) this.finish(oldest, null);
+      }
 
       const w: Waiter = { resolve, ticks: 0, timer: undefined as unknown as NodeJS.Timeout };
       /* The tick bound only advances when the scraper settles, and it settles

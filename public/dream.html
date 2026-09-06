@@ -138,6 +138,17 @@ h2 {
 .pfail { color: var(--critical); font-size: 12px; font-weight: 600; margin: 4px 0 0 4px; }
 .perr  { color: var(--ink-2); font-size: 11.5px; margin: 1px 0 2px 18px; }
 .perr code { font: 11px ui-monospace, Menlo, monospace; color: var(--critical); }
+/* A phase's own report line — the counts gbrain printed for it. This is
+   ordinary output, so it must read quieter than .pfail/.perr/.fail, which are
+   alarms. Same indent as .perr; the mark carries the only colour. */
+.preport { color: var(--ink-2); font-size: 11.5px; margin: 1px 0 1px 18px; }
+.preport code { font: 11px ui-monospace, Menlo, monospace; color: var(--muted); margin-right: 5px; }
+
+.toggle {
+  float: right; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; color: var(--ink-2); cursor: pointer; user-select: none;
+}
+.toggle input { cursor: pointer; margin: 0; }
 
 .run-meta { font-size: 12.5px; color: var(--ink-2); margin: 4px 0 12px; }
 .run-meta code { font: 11.5px ui-monospace, Menlo, monospace; }
@@ -191,6 +202,15 @@ const arr = (json) => {
    and had nothing to apply. A mark this build does not know renders `?` rather
    than borrowing another mark's glyph and asserting something untrue. */
 const SYMBOL = { ran: '✓', failed: '✗', noop: '!', skipped: '−' };
+/* gbrain's report text frequently restates the phase it sits under
+   (`extract_facts  extract_facts skipped: …`). Strip that one exact prefix so
+   the line reads once. Presentational only: an exact match, never a number, and
+   the untrimmed text stays on the row's title. */
+const trimPhase = (phase, text) => {
+  const t = String(text);
+  if (!phase || !t.startsWith(phase)) return t;
+  return t.slice(phase.length).replace(/^[:\s]+/, '') || t;
+};
 
 async function load() {
   let payload;
@@ -231,7 +251,17 @@ function select(el) {
   el.classList.add('sel');
 }
 
+/* The night currently on screen, held so the phase-detail toggle can re-render
+   from it. Re-fetching to flip a presentational flag would be a round trip for
+   nothing, and would blank the panel while a cold log read runs. */
+let current = null;
+/* Off by default: the mark strip is the triage view, and twelve sources ×
+   ~ten phases of report text buries it. Not persisted — nothing else on these
+   pages touches localStorage, and this is not worth being the first. */
+let showReport = false;
+
 async function detail(date) {
+  current = null;
   const res = await fetch('/api/dream/nights/' + date);
   /* 503 means the log could not be read at all; 404 means it was read and this
      night genuinely has no run. Collapsing them here would undo, at the UI
@@ -247,8 +277,18 @@ async function detail(date) {
   const d = await res.json();
   if (!d.run) { $('detail').innerHTML = '<p class="detail-empty">' + esc(date) + ': never fired.</p>'; return; }
 
+  current = { date, d };
+  renderDetail();
+}
+
+function renderDetail() {
+  if (!current) return;
+  const { date, d } = current;
+
   const r = d.run;
-  let head = '<h2>' + esc(date) + '</h2><div class="run-meta">' + fmt(r.startedAt) + ' → ' + fmt(r.endedAt) +
+  let head = '<label class="toggle"><input type="checkbox" id="rep"' + (showReport ? ' checked' : '') +
+             '> show phase detail</label>' +
+             '<h2>' + esc(date) + '</h2><div class="run-meta">' + fmt(r.startedAt) + ' → ' + fmt(r.endedAt) +
              ' · <b>' + esc(r.termination) + '</b>';
   if (r.globalPassRc !== null) head += ' · global pass rc=' + esc(String(r.globalPassRc));
   head += '</div>';
@@ -316,6 +356,14 @@ async function detail(date) {
          that failed inside it. Three different claims, three different rows. */
       if (p.mark === 'failed')
         body += '<div class="pfail">✗ ' + esc(p.phase) + ' — ' + esc(p.text) + '</div>';
+      /* Every other phase's report line, only when asked for. A failed phase is
+         deliberately not repeated here: .pfail above already carries the same
+         `text`, and it must keep rendering whether the toggle is on or off —
+         the toggle governs ordinary output, never an alarm. */
+      else if (showReport && p.text)
+        body += '<div class="preport" title="' + esc(p.text) + '"><span class="mark-' +
+                esc(p.mark) + '">' + esc(SYMBOL[p.mark] || '?') + '</span> <code>' +
+                esc(p.phase) + '</code>' + esc(trimPhase(p.phase, p.text)) + '</div>';
       for (const e of arr(p.errorsJson))
         body += '<div class="perr"><code>' + esc(e.code) + '</code> ' + esc(e.detail) + '</div>';
       for (const f of arr(p.failuresJson))
@@ -324,6 +372,10 @@ async function detail(date) {
   }
 
   $('detail').innerHTML = head + body;
+  /* Re-wired every render: the panel is a full innerHTML rewrite, so the
+     checkbox this handler was attached to no longer exists by now. */
+  const rep = $('rep');
+  if (rep) rep.onchange = () => { showReport = rep.checked; renderDetail(); };
 }
 
 load();

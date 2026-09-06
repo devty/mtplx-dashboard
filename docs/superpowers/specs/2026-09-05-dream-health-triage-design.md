@@ -67,8 +67,16 @@ Cycle blocks, unprefixed:
   Worse, a dropped opener leaves the previous block open, so the next source's phase
   lines append to it. Match any reason word.
 - `  <mark> <phase>  <text>` where mark is `✓` (ran), `-` (skipped: cooldown or disabled),
-  or `!` (ran but applied nothing).
+  `!` (ran but applied nothing), or `✗` (the phase failed outright and wrote nothing).
+  Five `✗` phase marks occur in the log: two `patterns`, three `calibration_profile`.
+- `      [<Class>/<CODE>] <detail>` — the classification line beneath a failed phase, e.g.
+  `[InternalError/PATTERNS_CHILD_DEAD]`. One per failed phase in the log so far.
 - `      ✗ <slug>: <message>` — a nested per-item failure under a phase line.
+
+**`✗` means two different things at two indents, and only the indent tells them apart.**
+At exactly two spaces it is the phase's own verdict; at six it is one item failing inside a
+phase that otherwise ran. A parser that models only the nested form silently drops the more
+important one, and the night renders clean.
 - `  totals: lint=N backlinks=N synced=N …` — closes some blocks.
 
 Noise interleaved between blocks: `Brain is healthy. N phase(s) checked in N.Ns.`,
@@ -129,7 +137,9 @@ Four failure modes, all required:
 
 1. **Run started, never finished** — needs an explicit unterminated state (§2.3).
 2. **Night silently missed** — absence of evidence; needs a schedule model (§2.4).
-3. **Phase-level failures** — `!` marks and nested `✗` items; needs per-phase records.
+3. **Phase-level failures** — `✗` phase marks, `!` marks, and nested `✗` items; needs
+   per-phase records. A `✗` phase is the loudest of the three: a run can exit 0 with one
+   inside it, so the night's own status will not carry the signal.
 4. **Chronic backlog / drift** — lint remaining, calibration stall, orphan ratio; needs
    history depth.
 
@@ -137,7 +147,8 @@ Four failure modes, all required:
 
 Four dream tables added to the existing `data/history.db` alongside `run` / `request` /
 `transcript` / `gauge`, plus a single-row `dream_ingest` table holding the byte offset §5
-requires. `SCHEMA_VERSION` goes 2 → 4 (3 added the tables; 4 added the `scope` column below);
+requires. `SCHEMA_VERSION` goes 2 → 5 (3 added the tables; 4 added the `scope` column below; 5 added
+`errors_json`);
 the existing set-aside path handles the mismatch by moving the old file aside, so no migration
 is written.
 
@@ -159,11 +170,14 @@ is written.
   Folding the largest block in the run into the bucket that means "we could not work this
   out" would dilute the one signal §4.1 exists to protect.
 
-- **`dream_phase`** — one row per `✓ / - / !` line.
+- **`dream_phase`** — one row per `✓ / ✗ / - / !` line.
   `run_id`, `cycle_id`, `source_id` (nullable), `phase`, `mark`, `scope`, `raw_text`, and
   nested `✗` items as `failure_count` (INTEGER) plus `failures_json` (TEXT,
   `[{slug, message}]`). These stay on the row rather than becoming a fifth table: they are
   small, bounded, and never read apart from their parent phase.
+  A failed phase's own `[Class/CODE]` lines go in `errors_json` (TEXT, `[{code, detail}]`),
+  NOT in `failures_json`: `{slug, message}` would present a whole-phase abort as one page
+  failing inside a phase that ran, which is the misreading this view exists to prevent.
   **No parsed numerics.** An earlier draft of this section promised "parsed numerics where a
   known phase shape yields them"; no such columns were built and none are needed yet. Every
   number in the log is preserved verbatim in `raw_text`, which is what the view renders, and

@@ -117,3 +117,37 @@ test('the trap fixture has no global pass and none is invented', () => {
   attributeRun(run);
   assert.equal(run.cycles.some((c) => c.scope === 'global'), false);
 });
+
+test('a block carrying a failed phase still attributes — global stays global', () => {
+  /* `patterns` and `calibration_profile` are global-pass phases and are in
+     neither PER_SOURCE_PHASES nor MIXED_PHASES, so the phase-set disambiguator
+     has nothing to say about them. The marker line must win, or the run's
+     largest block — the one now known to contain a failure — lands in the
+     bucket that means "we could not work this out". */
+  const [run] = parseDreamLog(fixture('failed-phase-run.txt')).runs;
+  attributeRun(run);
+
+  const global = run.cycles.filter((c) => c.scope === 'global');
+  assert.equal(global.length, 1);
+  assert.equal(global[0].attribution, 'stamped');
+  assert.equal(global[0].sourceId, null);
+  assert.ok(
+    global[0].phases.some((p) => p.mark === 'failed' && p.phase === 'calibration_profile'),
+    'the failed phase is inside the global pass, and stayed there'
+  );
+});
+
+test('a failed phase does not disturb per-source attribution', () => {
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    '[dream-nightly] cycling sources: default calendar',
+    'Dream cycle (partial) in 1.0s:',
+    '  ✓ lint  0 fix(es) applied',
+    '  ✗ sync  sync failed: remote unreachable',
+    '[dream-nightly] stamped last_full_cycle_at for default',
+  ].join('\n');
+  const [run] = parseDreamLog(text).runs;
+  attributeRun(run);
+  assert.equal(run.cycles[0].sourceId, 'default');
+  assert.equal(run.cycles[0].attribution, 'stamped');
+});

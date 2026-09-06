@@ -188,3 +188,73 @@ test('a drifted cycling-sources or stamped line trips the canary', () => {
   );
   assert.equal(r.unrecognisedCount, 2);
 });
+
+test('a phase-level ✗ is a failed mark, not a dropped line', () => {
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    'Dream cycle (partial) in 7133.4s:',
+    "  ✗ patterns    pattern-detection subagent job 10701 ended 'dead'; nothing was written",
+    "      [InternalError/PATTERNS_CHILD_DEAD] subagent job 10701 outcome 'dead' with zero pattern pages written",
+  ].join('\n');
+  const r = parseDreamLog(text);
+  assert.equal(r.unrecognisedCount, 0, 'neither line may fall through to the canary');
+  const [phase] = r.runs[0].cycles[0].phases;
+  assert.equal(phase.mark, 'failed');
+  assert.equal(phase.phase, 'patterns');
+  assert.match(phase.text, /ended 'dead'/);
+  assert.equal(phase.errors.length, 1);
+  assert.equal(phase.errors[0].code, 'InternalError/PATTERNS_CHILD_DEAD');
+  assert.match(phase.errors[0].detail, /zero pattern pages written/);
+  assert.equal(phase.failures.length, 0, 'a phase abort is not an item failure');
+});
+
+test('the two ✗ indents stay unambiguous', () => {
+  // Two spaces is the phase's own verdict; four-or-more is one item failing
+  // inside a phase that otherwise ran. Same character, opposite meaning.
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    'Dream cycle (partial) in 249.6s:',
+    '  ! extract_atoms  extract_atoms: 0 atoms from 0/50 pages (1 failed)',
+    '      ✗ linkedin/messages/example: aborting phase: billing error is a whole-run condition',
+    '  ✗ calibration_profile  calibration_profile failed: Not found',
+  ].join('\n');
+  const r = parseDreamLog(text);
+  assert.equal(r.unrecognisedCount, 0);
+  const [atoms, calib] = r.runs[0].cycles[0].phases;
+  assert.equal(r.runs[0].cycles[0].phases.length, 2, 'the nested ✗ is not a phase');
+  assert.equal(atoms.mark, 'noop');
+  assert.equal(atoms.failures.length, 1);
+  assert.equal(atoms.failures[0].slug, 'linkedin/messages/example');
+  assert.equal(atoms.errors.length, 0);
+  assert.equal(calib.mark, 'failed');
+  assert.equal(calib.failures.length, 0);
+});
+
+test('an error line with no phase above it still trips the canary', () => {
+  const r = parseDreamLog(
+    [
+      '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+      'Dream cycle (ok) in 1.0s:',
+      '      [InternalError/ORPHANED] nothing declared this',
+    ].join('\n')
+  );
+  assert.equal(r.unrecognisedCount, 1);
+});
+
+test('the real failed-phase run parses its ✗ phase and error detail', () => {
+  const r = parseDreamLog(fixture('failed-phase-run.txt'));
+  assert.equal(r.runs.length, 1);
+  assert.equal(r.runs[0].termination, 'completed', 'exit=0 — a clean-looking night');
+  const failed = r.runs[0].cycles
+    .flatMap((c) => c.phases)
+    .filter((p) => p.mark === 'failed');
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].phase, 'calibration_profile');
+  assert.equal(failed[0].errors[0].code, 'InternalError/CALIBRATION_PROFILE_UNKNOWN');
+  assert.match(failed[0].errors[0].detail, /credit balance is too low/);
+
+  // The same run also carries nested item failures, at the other indent.
+  const nested = r.runs[0].cycles.flatMap((c) => c.phases).filter((p) => p.failures.length);
+  assert.ok(nested.length >= 1, 'and they are still item failures, not phases');
+  assert.ok(nested.every((p) => p.mark !== 'failed'));
+});

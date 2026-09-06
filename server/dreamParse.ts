@@ -8,14 +8,34 @@
  *  Attribution of blocks to sources is NOT done here — see dreamAttribute.ts.
  *  Blocks come back with sourceId null. */
 
-export type DreamMark = 'ran' | 'skipped' | 'noop';
+/** `failed` is the phase's own verdict — the phase aborted and produced
+ *  nothing. It is NOT the same as `noop` (`!`), which means the phase ran to
+ *  completion and had nothing to apply, and it is not the same as a nested item
+ *  failure (see DreamItemFailure), which is one item failing inside a phase
+ *  that otherwise ran. Both `✗` shapes exist in the log at different indents;
+ *  see RE_PHASE / RE_FAILURE. */
+export type DreamMark = 'ran' | 'skipped' | 'noop' | 'failed';
 export type DreamTermination = 'completed' | 'warned' | 'truncated' | 'running';
 export type DreamAttribution = 'stamped' | 'inferred' | 'unknown';
 export type DreamCycleScope = 'source' | 'global';
 
+/** One item — a page, a slug — that failed inside a phase that itself ran. */
 export interface DreamItemFailure {
   slug: string;
   message: string;
+}
+
+/** The `[Class/CODE] detail` line gbrain prints beneath a phase that failed
+ *  outright. Kept apart from DreamItemFailure rather than squeezed into its
+ *  {slug, message}: `code` is a machine classification of why the PHASE died
+ *  (`PATTERNS_CHILD_DEAD`), not the name of an item that died inside it. Filing
+ *  it as a slug would render a whole-phase abort as though one page had failed,
+ *  which is precisely the reading this view must not produce. An array because
+ *  nothing in the log's grammar promises exactly one — a second detail line
+ *  would be recorded, not silently overwrite the first. */
+export interface DreamPhaseError {
+  code: string;
+  detail: string;
 }
 
 export interface DreamPhaseLine {
@@ -23,6 +43,7 @@ export interface DreamPhaseLine {
   phase: string;
   text: string;
   failures: DreamItemFailure[];
+  errors: DreamPhaseError[];
 }
 
 export interface DreamCycleBlock {
@@ -92,8 +113,17 @@ const RE_GLOBAL_PASS = /^\[dream-nightly\] global pass \(brain-wide phases, once
    source's block would still be open and its phase lines would silently
    attach to the wrong cycle instead of tripping the unrecognised counter. */
 const RE_CYCLE = /^Dream cycle \([a-z]+\) in ([\d.]+)s:\s*$/;
-const RE_PHASE = /^ {2}([✓!-]) (\S+)\s{1,}(.*)$/;
+/* The two `✗` shapes are told apart by indent alone, and the log is consistent
+   about it: a PHASE mark sits at exactly two spaces, a nested item failure at
+   six. RE_PHASE's ` {2}` is exact, not a minimum — a six-space line has a space
+   at index 2, which is not in the mark class — and RE_FAILURE requires four or
+   more, so neither regex can reach the other's lines. They are checked in that
+   knowledge, not in a particular order. */
+const RE_PHASE = /^ {2}([✓✗!-]) (\S+)\s{1,}(.*)$/;
 const RE_FAILURE = /^ {4,}✗ ([^:]+):\s*(.*)$/;
+/* `      [InternalError/PATTERNS_CHILD_DEAD] subagent job 10701 outcome 'dead'`
+   — the classification line beneath a failed phase, at the nested indent. */
+const RE_PHASE_ERROR = /^ {4,}\[([A-Za-z][A-Za-z0-9]*\/[A-Z][A-Z0-9_]*)\]\s+(\S.*)$/;
 
 /* Lines that are known, carry no record, and must not inflate the
    unrecognised count — that count is the format-drift canary and is worthless
@@ -122,7 +152,12 @@ const NOISE = [
   /^ *$/,
 ];
 
-const MARKS: Record<string, DreamMark> = { '✓': 'ran', '-': 'skipped', '!': 'noop' };
+const MARKS: Record<string, DreamMark> = {
+  '✓': 'ran',
+  '✗': 'failed',
+  '-': 'skipped',
+  '!': 'noop',
+};
 
 export function parseDreamLog(text: string): DreamParseResult {
   const runs: DreamRunRecord[] = [];
@@ -241,6 +276,15 @@ export function parseDreamLog(text: string): DreamParseResult {
       continue;
     }
 
+    /* Guarded on lastPhase for the same reason RE_FAILURE is: an error line with
+       no phase above it is drift, and must reach the counter rather than be
+       quietly dropped. */
+    const perr = RE_PHASE_ERROR.exec(line);
+    if (perr && lastPhase) {
+      lastPhase.errors.push({ code: perr[1], detail: perr[2].trim() });
+      continue;
+    }
+
     const phase = RE_PHASE.exec(line);
     if (phase && cycle) {
       lastPhase = {
@@ -248,6 +292,7 @@ export function parseDreamLog(text: string): DreamParseResult {
         phase: phase[2],
         text: phase[3].trim(),
         failures: [],
+        errors: [],
       };
       cycle.phases.push(lastPhase);
       continue;

@@ -111,20 +111,37 @@ test('clientLabel extracts a product token', () => {
 test('truncate counts bytes, not characters', () => {
   const ascii = 'a'.repeat(100);
   assert.deepEqual(truncate(ascii, 100), { value: ascii, truncated: false });
-  assert.equal(truncate(ascii, 10).value?.length, 10);
+  assert.equal(truncate(ascii, 10).value, 'a'.repeat(10));
   assert.equal(truncate(ascii, 10).truncated, true);
-
-  const cjk = '経'.repeat(100);                        // 3 bytes each
-  const t = truncate(cjk, 30);
-  assert.equal(t.truncated, true);
-  assert.equal(Buffer.byteLength(t.value!, 'utf8') <= 30, true);
 });
 
 test('truncate never splits a multi-byte character', () => {
   const t = truncate('経経経', 4);                      // 4 bytes cuts mid-character
-  assert.equal(Buffer.byteLength(t.value!, 'utf8') <= 4, true);
   assert.equal(t.value, '経');                          // not a replacement char
   assert.equal(t.truncated, true);
+});
+
+/* Exact-boundary cases, asserted by VALUE. An upper-bound assertion
+   (byteLength <= cap) cannot distinguish a correct result from one that
+   silently discards a character which fit — which is exactly the bug an
+   earlier version of this function had. */
+test('truncate keeps a character that completes exactly at the cap', () => {
+  assert.equal(truncate('経'.repeat(100), 3).value, '経');
+  assert.equal(truncate('経'.repeat(100), 30).value, '経'.repeat(10));
+  assert.equal(Buffer.byteLength(truncate('経'.repeat(100), 30).value!, 'utf8'), 30);
+});
+
+/* 4-byte sequences take a different walk-back path from 3-byte ones. */
+test('truncate handles 4-byte sequences at and across the boundary', () => {
+  assert.equal(truncate('a😀b', 5).value, 'a😀');       // 1 + 4 fits exactly
+  assert.equal(truncate('a😀b', 4).value, 'a');         // the emoji genuinely does not fit
+  assert.equal(truncate('😀😀', 4).value, '😀');
+  assert.equal(truncate('😀😀', 3).value, '');          // nothing whole fits
+});
+
+test('truncate handles a zero or negative cap', () => {
+  assert.deepEqual(truncate('anything', 0), { value: '', truncated: true });
+  assert.deepEqual(truncate('', 0), { value: '', truncated: false });
 });
 
 test('truncate passes null through', () => {

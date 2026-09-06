@@ -109,13 +109,24 @@ export function clientLabel(userAgent: string | undefined): string | null {
  *  A character budget would let a CJK transcript through at ~3x the cap. */
 export function truncate(s: string | null, maxBytes: number): { value: string | null; truncated: boolean } {
   if (s === null) return { value: null, truncated: false };
+  if (maxBytes <= 0) return { value: '', truncated: s.length > 0 };
   if (Buffer.byteLength(s, 'utf8') <= maxBytes) return { value: s, truncated: false };
 
   const cut = Buffer.from(s, 'utf8').subarray(0, maxBytes);
-  /* Walk back off a partial trailing sequence: continuation bytes are
-     0b10xxxxxx, so drop them and then the lead byte they belonged to. */
-  let end = cut.length;
-  while (end > 0 && (cut[end - 1] & 0xc0) === 0x80) end--;
-  if (end > 0 && (cut[end - 1] & 0x80) !== 0) end--;
+
+  /* Walk back over continuation bytes (0b10xxxxxx) to the lead byte of the
+     last sequence, then keep that sequence only if it COMPLETED inside the
+     cut. Dropping the lead byte unconditionally is the tempting one-liner and
+     it is wrong: when the cap lands exactly on a character boundary the
+     sequence is whole, and discarding it throws away a character that fit.
+     For 3-byte text and a cap that is a multiple of 3 that is every character,
+     and a cap of 3 yields "". */
+  let lead = cut.length - 1;
+  while (lead >= 0 && (cut[lead] & 0xc0) === 0x80) lead--;
+  if (lead < 0) return { value: '', truncated: true };
+
+  const b = cut[lead];
+  const seqLen = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : b >= 0xc0 ? 2 : 1;
+  const end = lead + seqLen <= cut.length ? cut.length : lead;
   return { value: cut.subarray(0, end).toString('utf8'), truncated: true };
 }

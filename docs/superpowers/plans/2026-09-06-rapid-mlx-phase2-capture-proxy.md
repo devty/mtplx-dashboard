@@ -213,20 +213,37 @@ test('clientLabel extracts a product token', () => {
 test('truncate counts bytes, not characters', () => {
   const ascii = 'a'.repeat(100);
   assert.deepEqual(truncate(ascii, 100), { value: ascii, truncated: false });
-  assert.equal(truncate(ascii, 10).value?.length, 10);
+  assert.equal(truncate(ascii, 10).value, 'a'.repeat(10));
   assert.equal(truncate(ascii, 10).truncated, true);
-
-  const cjk = '経'.repeat(100);                        // 3 bytes each
-  const t = truncate(cjk, 30);
-  assert.equal(t.truncated, true);
-  assert.equal(Buffer.byteLength(t.value!, 'utf8') <= 30, true);
 });
 
 test('truncate never splits a multi-byte character', () => {
   const t = truncate('経経経', 4);                      // 4 bytes cuts mid-character
-  assert.equal(Buffer.byteLength(t.value!, 'utf8') <= 4, true);
   assert.equal(t.value, '経');                          // not a replacement char
   assert.equal(t.truncated, true);
+});
+
+/* Exact-boundary cases, asserted by VALUE. An upper-bound assertion
+   (byteLength <= cap) cannot distinguish a correct result from one that
+   silently discards a character which fit — which is exactly the bug an
+   earlier version of this function had. */
+test('truncate keeps a character that completes exactly at the cap', () => {
+  assert.equal(truncate('経'.repeat(100), 3).value, '経');
+  assert.equal(truncate('経'.repeat(100), 30).value, '経'.repeat(10));
+  assert.equal(Buffer.byteLength(truncate('経'.repeat(100), 30).value!, 'utf8'), 30);
+});
+
+/* 4-byte sequences take a different walk-back path from 3-byte ones. */
+test('truncate handles 4-byte sequences at and across the boundary', () => {
+  assert.equal(truncate('a😀b', 5).value, 'a😀');       // 1 + 4 fits exactly
+  assert.equal(truncate('a😀b', 4).value, 'a');         // the emoji genuinely does not fit
+  assert.equal(truncate('😀😀', 4).value, '😀');
+  assert.equal(truncate('😀😀', 3).value, '');          // nothing whole fits
+});
+
+test('truncate handles a zero or negative cap', () => {
+  assert.deepEqual(truncate('anything', 0), { value: '', truncated: true });
+  assert.deepEqual(truncate('', 0), { value: '', truncated: false });
 });
 
 test('truncate passes null through', () => {
@@ -355,14 +372,25 @@ export function clientLabel(userAgent: string | undefined): string | null {
  *  A character budget would let a CJK transcript through at ~3x the cap. */
 export function truncate(s: string | null, maxBytes: number): { value: string | null; truncated: boolean } {
   if (s === null) return { value: null, truncated: false };
+  if (maxBytes <= 0) return { value: '', truncated: s.length > 0 };
   if (Buffer.byteLength(s, 'utf8') <= maxBytes) return { value: s, truncated: false };
 
   const cut = Buffer.from(s, 'utf8').subarray(0, maxBytes);
-  /* Walk back off a partial trailing sequence: continuation bytes are
-     0b10xxxxxx, so drop them and then the lead byte they belonged to. */
-  let end = cut.length;
-  while (end > 0 && (cut[end - 1] & 0xc0) === 0x80) end--;
-  if (end > 0 && (cut[end - 1] & 0x80) !== 0) end--;
+
+  /* Walk back over continuation bytes (0b10xxxxxx) to the lead byte of the
+     last sequence, then keep that sequence only if it COMPLETED inside the
+     cut. Dropping the lead byte unconditionally is the tempting one-liner and
+     it is wrong: when the cap lands exactly on a character boundary the
+     sequence is whole, and discarding it throws away a character that fit.
+     For 3-byte text and a cap that is a multiple of 3 that is every character,
+     and a cap of 3 yields "". */
+  let lead = cut.length - 1;
+  while (lead >= 0 && (cut[lead] & 0xc0) === 0x80) lead--;
+  if (lead < 0) return { value: '', truncated: true };
+
+  const b = cut[lead];
+  const seqLen = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : b >= 0xc0 ? 2 : 1;
+  const end = lead + seqLen <= cut.length ? cut.length : lead;
   return { value: cut.subarray(0, end).toString('utf8'), truncated: true };
 }
 ```
@@ -370,7 +398,7 @@ export function truncate(s: string | null, maxBytes: number): { value: string | 
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `node --disable-warning=ExperimentalWarning --import tsx --test server/capture.test.ts`
-Expected: PASS, 15 tests.
+Expected: PASS, 18 tests.
 
 - [ ] **Step 5: Typecheck and commit**
 
@@ -930,7 +958,7 @@ function toSummary(r: RawRequestRow): RequestSummary {
 Run: `node --disable-warning=ExperimentalWarning --import tsx --test server/db.test.ts`
 Expected: PASS — 51 existing plus 9 new.
 
-Then `npm test` — expected 143/143 (108 existing + 15 from Task 1 + 11 from Task 2 + these 9).
+Then `npm test` — expected 146/146 (108 existing + 18 from Task 1 + 11 from Task 2 + these 9).
 
 - [ ] **Step 5: Commit**
 
@@ -1502,7 +1530,7 @@ export function listening(): boolean {
 Run: `node --disable-warning=ExperimentalWarning --import tsx --test server/proxy.test.ts`
 Expected: PASS, 10 tests. The slow-upstream test takes ~3.2 s by design — that is the assertion.
 
-Then `npm test` — expected 153/153 (143 + these 10).
+Then `npm test` — expected 156/156 (146 + these 10).
 
 - [ ] **Step 6: Commit**
 
@@ -1625,7 +1653,7 @@ Change the signature to `export function start(t: Target, s: Store, j: EngineJoi
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `node --disable-warning=ExperimentalWarning --import tsx --test server/promScraper.test.ts`
-Expected: PASS, 9 tests (7 existing + 2 new). `npm test` — expected 155/155.
+Expected: PASS, 9 tests (7 existing + 2 new). `npm test` — expected 158/158.
 
 Note `npm run typecheck` will now fail in `server/server.ts` (it calls `scraper.start` with two arguments). That is expected and is fixed in Task 6. Do not modify `server.ts` here.
 
@@ -1735,7 +1763,7 @@ Update the boot log to name the proxy port when capture is enabled.
 
 ```bash
 npm run typecheck    # expected clean
-npm test             # expected 155/155
+npm test             # expected 158/158
 npm run build        # expected clean
 ```
 
@@ -2015,7 +2043,7 @@ git commit -m "docs: describe the capture proxy architecture"
 
 ## Done when
 
-- `npm test` passes: `capture` (15), `engineJoin` (11), `proxy` (10), plus the existing 108 and the 9 new `db` tests and 2 new scraper tests — 155 total.
+- `npm test` passes: `capture` (18), `engineJoin` (11), `proxy` (10), plus the existing 108 and the 9 new `db` tests and 2 new scraper tests — 158 total.
 - `npm run typecheck` and `npm run build` are clean.
 - A completion sent to `:8010` returns normally and produces a `request` row with real token counts, plus a `transcript` row.
 - A single-request interval yields `engine_joined = 1` with a non-null `ttft_s`; a burst yields `engine_joined = 0` with nulls.

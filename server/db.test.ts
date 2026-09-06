@@ -6,6 +6,8 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createStore, SCHEMA_VERSION, REQUEST_SERIES, RUN_IDENTITY_TOLERANCE_MS } from './db';
 import type { RunInfo, RunRow, RunDetail, RequestRow } from './db';
+import { parseDreamLog } from './dreamParse';
+import { attributeRun } from './dreamAttribute';
 
 const DAY = 86_400_000;
 
@@ -97,14 +99,24 @@ test('creates the schema successfully', () => {
   cleanup();
 });
 
-test('v2 schema has the transcript table', () => {
+test('the current schema has the transcript and dream tables', () => {
   const { read, cleanup } = tmpStore();
   const tables = read<{ name: string }>(
     `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`
   ).map(r => r.name);
-  assert.deepEqual(tables, ['gauge', 'request', 'run', 'transcript']);
+  assert.deepEqual(tables, [
+    'dream_ingest',
+    'dream_night',
+    'dream_phase',
+    'dream_run',
+    'dream_source_cycle',
+    'gauge',
+    'request',
+    'run',
+    'transcript',
+  ]);
   const [{ user_version }] = read<{ user_version: number }>('PRAGMA user_version');
-  assert.equal(user_version, 2);
+  assert.equal(user_version, SCHEMA_VERSION);
   cleanup();
 });
 
@@ -150,7 +162,7 @@ test('REQUEST_SERIES keeps only the two request-derived sparklines', () => {
 });
 
 /* Spec section 5: no migration. The old file is moved aside, WAL sidecars and
-   all, and a fresh v2 database takes its place. */
+   all, and a fresh database takes its place. */
 test('a v1 database is set aside rather than migrated', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtplx-db-'));
   const file = path.join(dir, 'history.db');
@@ -164,7 +176,7 @@ test('a v1 database is set aside rather than migrated', () => {
   const store = createStore({ path: file, enabled: true, retentionDays: 30, transcriptRetentionDays: 7 });
   assert.equal(store.status().ok, true);
 
-  const aside = path.join(dir, 'history-v1-mtplx.db');
+  const aside = path.join(dir, 'history-v1.db');
   assert.ok(fs.existsSync(aside), 'old database was not set aside');
 
   const kept = new DatabaseSync(aside);
@@ -177,7 +189,7 @@ test('a v1 database is set aside rather than migrated', () => {
 
   const fresh = new DatabaseSync(file);
   const [{ user_version }] = fresh.prepare('PRAGMA user_version').all() as { user_version: number }[];
-  assert.equal(user_version, 2);
+  assert.equal(user_version, SCHEMA_VERSION);
   assert.equal(
     fresh.prepare(`SELECT name FROM sqlite_master WHERE name = 'legacy'`).all().length,
     0,
@@ -219,8 +231,8 @@ test('a second set-aside never destroys the first archive', () => {
   makeV1(7);
   createStore({ path: file, ...opts }).close();
 
-  assert.deepEqual(rows(path.join(dir, 'history-v1-mtplx.db')), [42], 'first archive was destroyed');
-  assert.deepEqual(rows(path.join(dir, 'history-v1-mtplx.2.db')), [7]);
+  assert.deepEqual(rows(path.join(dir, 'history-v1.db')), [42], 'first archive was destroyed');
+  assert.deepEqual(rows(path.join(dir, 'history-v1.2.db')), [7]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -240,7 +252,7 @@ test('WAL sidecars move with the set-aside database', () => {
 
   createStore({ path: file, enabled: true, retentionDays: 30, transcriptRetentionDays: 7 }).close();
 
-  const aside = path.join(dir, 'history-v1-mtplx.db');
+  const aside = path.join(dir, 'history-v1.db');
   assert.equal(fs.readFileSync(aside + '-wal', 'utf8'), 'stale-wal');
   assert.equal(fs.readFileSync(aside + '-shm', 'utf8'), 'stale-shm');
   assert.equal(fs.existsSync(file + '-wal'), false, 'stale -wal left beside the fresh database');
@@ -259,16 +271,16 @@ test('an orphaned sidecar does not get overwritten by a set-aside', () => {
   fs.writeFileSync(file + '-wal', 'incoming-wal');
 
   /* An archive whose .db was deleted but whose sidecar was left behind. */
-  fs.writeFileSync(path.join(dir, 'history-v1-mtplx.db-wal'), 'orphan');
+  fs.writeFileSync(path.join(dir, 'history-v1.db-wal'), 'orphan');
 
   createStore({ path: file, enabled: true, retentionDays: 30, transcriptRetentionDays: 7 }).close();
 
   assert.equal(
-    fs.readFileSync(path.join(dir, 'history-v1-mtplx.db-wal'), 'utf8'),
+    fs.readFileSync(path.join(dir, 'history-v1.db-wal'), 'utf8'),
     'orphan',
     'orphaned sidecar was overwritten'
   );
-  assert.equal(fs.readFileSync(path.join(dir, 'history-v1-mtplx.2.db-wal'), 'utf8'), 'incoming-wal');
+  assert.equal(fs.readFileSync(path.join(dir, 'history-v1.2.db-wal'), 'utf8'), 'incoming-wal');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -277,7 +289,7 @@ test('a matching version is left alone', () => {
   store.close();
   const reopened = createStore({ path: file, enabled: true, retentionDays: 30, transcriptRetentionDays: 7 });
   assert.equal(reopened.status().ok, true);
-  assert.equal(fs.existsSync(path.join(dir, 'history-v2-mtplx.db')), false);
+  assert.equal(fs.existsSync(path.join(dir, `history-v${SCHEMA_VERSION}.db`)), false);
   reopened.close();
   cleanup();
 });
@@ -863,4 +875,233 @@ test('getRun on a disabled store returns null', () => {
   assert.equal(store.getRun(1), null);
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('stores a dream run and reads it back as a night', () => {
+  const { store, cleanup } = tmpStore(); // existing helper: throwaway on-disk sqlite
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    '[dream-nightly] cycling sources: default',
+    'Dream cycle (partial) in 1.4s:',
+    '  ✓ lint  0 fix(es) applied; 335 non-fixable',
+    '  ! extract_facts  skipped: 5 legacy facts',
+    '[dream-nightly] stamped last_full_cycle_at for default',
+    '[dream-nightly] WARN: global pass failed (rc=143)',
+    '[dream-nightly:commit] default committed e7fd46f',
+  ].join('\n');
+  const [run] = parseDreamLog(text).runs;
+  attributeRun(run);
+
+  const id = store.insertDreamRun(run, 'e7fd46f', 'both');
+  assert.ok(id !== null);
+
+  store.upsertDreamNight('2026-09-05', Date.parse('2026-09-05T07:05:00'), id, 'warned');
+  const nights = store.queryDreamNights(10);
+  assert.equal(nights.length, 1);
+  assert.equal(nights[0].date, '2026-09-05');
+  assert.equal(nights[0].status, 'warned');
+
+  const detail = store.getDreamNight('2026-09-05');
+  assert.ok(detail);
+  assert.equal(detail.run?.globalPassRc, 143);
+  assert.equal(detail.run?.commitSource, 'both');
+  assert.equal(detail.phases.length, 2);
+  assert.equal(detail.phases.find((p) => p.phase === 'extract_facts')?.mark, 'noop');
+  cleanup();
+});
+
+test('the global pass round-trips as its own scope, not as a source', () => {
+  const { store, cleanup } = tmpStore();
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    '[dream-nightly] cycling sources: default',
+    'Dream cycle (partial) in 1.4s:',
+    '  ✓ lint  0 fix(es) applied',
+    '[dream-nightly] stamped last_full_cycle_at for default',
+    '[dream-nightly] global pass (brain-wide phases, once)',
+    'Dream cycle (partial) in 9424.8s:',
+    '  ✓ synthesize  no synthesis submitted',
+    '[dream-nightly] global pass ok',
+  ].join('\n');
+  const [run] = parseDreamLog(text).runs;
+  attributeRun(run);
+  const id = store.insertDreamRun(run, null, 'none');
+  store.upsertDreamNight('2026-09-05', 0, id, 'warned');
+
+  const phases = store.getDreamNight('2026-09-05')!.phases;
+  assert.equal(phases.find((p) => p.phase === 'lint')?.scope, 'source');
+  const global = phases.find((p) => p.phase === 'synthesize');
+  assert.equal(global?.scope, 'global');
+  assert.equal(global?.sourceId, null);
+  assert.equal(global?.attribution, 'stamped');
+  cleanup();
+});
+
+test('a commit by a source other than `default` still stores its sha', () => {
+  const { store, cleanup } = tmpStore();
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    '[dream-nightly] WARN: global pass failed (rc=143)',
+    '[dream-nightly:commit] memorable committed 2bb4845',
+  ].join('\n');
+  const [run] = parseDreamLog(text).runs;
+  attributeRun(run);
+  const id = store.insertDreamRun(run, null, 'log');
+  store.upsertDreamNight('2026-09-05', 0, id, 'warned');
+  assert.equal(store.getDreamNight('2026-09-05')?.run?.committedSha, '2bb4845');
+  cleanup();
+});
+
+test('`default` still wins when several sources committed', () => {
+  const { store, cleanup } = tmpStore();
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    '[dream-nightly:commit] memorable committed 2bb4845',
+    '[dream-nightly:commit] default committed e7fd46f',
+  ].join('\n');
+  const [run] = parseDreamLog(text).runs;
+  attributeRun(run);
+  const id = store.insertDreamRun(run, null, 'log');
+  store.upsertDreamNight('2026-09-05', 0, id, 'warned');
+  assert.equal(store.getDreamNight('2026-09-05')?.run?.committedSha, 'e7fd46f');
+  cleanup();
+});
+
+test('insert-if-absent never restates a night that already has a verdict', () => {
+  const { store, cleanup } = tmpStore();
+  store.upsertDreamNight('2026-09-03', 111, null, 'ok');
+  store.insertDreamNightIfAbsent('2026-09-03', 222, 'missed');
+  store.insertDreamNightIfAbsent('2026-09-04', 333, 'missed');
+
+  const byDate = new Map(store.queryDreamNights(10).map((n) => [n.date, n]));
+  assert.equal(byDate.get('2026-09-03')?.status, 'ok');
+  assert.equal(byDate.get('2026-09-03')?.expectedAt, 111);
+  assert.equal(byDate.get('2026-09-04')?.status, 'missed');
+  cleanup();
+});
+
+test('the latest night is the newest date on record', () => {
+  const { store, cleanup } = tmpStore();
+  assert.equal(store.latestDreamNight(), null);
+  store.upsertDreamNight('2026-09-03', 111, null, 'ok');
+  store.upsertDreamNight('2026-09-05', 333, null, 'missed');
+  store.upsertDreamNight('2026-09-04', 222, null, 'ok');
+  // node:sqlite hands back null-prototype rows, so compare field-wise.
+  assert.equal(store.latestDreamNight()?.date, '2026-09-05');
+  assert.equal(store.latestDreamNight()?.expectedAt, 333);
+  cleanup();
+});
+
+test('a missed night is a row with no run', () => {
+  const { store, cleanup } = tmpStore();
+  store.upsertDreamNight('2026-09-03', Date.parse('2026-09-03T07:05:00'), null, 'missed');
+  const [night] = store.queryDreamNights(10);
+  assert.equal(night.status, 'missed');
+  assert.equal(night.runId, null);
+  assert.equal(store.getDreamNight('2026-09-03')?.run, null);
+  cleanup();
+});
+
+test('nested item failures survive the round trip', () => {
+  const { store, cleanup } = tmpStore();
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    '[dream-nightly] cycling sources: default',
+    '[dream-nightly] stamped last_full_cycle_at for default',
+    'Dream cycle (partial) in 812.4s:',
+    '  ! extract_atoms  124 atoms (1 failed)',
+    '      ✗ career-ops/by-company/n8n: unparseable JSON array',
+  ].join('\n');
+  const [run] = parseDreamLog(text).runs;
+  attributeRun(run);
+  const id = store.insertDreamRun(run, null, 'none');
+  store.upsertDreamNight('2026-09-05', 0, id, 'warned');
+
+  const phase = store.getDreamNight('2026-09-05')!.phases[0];
+  assert.equal(phase.failureCount, 1);
+  assert.deepEqual(JSON.parse(phase.failuresJson!)[0].slug, 'career-ops/by-company/n8n');
+  cleanup();
+});
+
+test('a failed phase and its error code survive the round trip', () => {
+  const { store, cleanup } = tmpStore();
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    '[dream-nightly] cycling sources: default',
+    '[dream-nightly] stamped last_full_cycle_at for default',
+    'Dream cycle (partial) in 812.4s:',
+    '  ✓ consolidate  promoted 0 facts',
+    "  ✗ patterns  pattern-detection subagent job 10701 ended 'dead'; nothing was written",
+    "      [InternalError/PATTERNS_CHILD_DEAD] subagent job 10701 outcome 'dead'",
+  ].join('\n');
+  const [run] = parseDreamLog(text).runs;
+  attributeRun(run);
+  const id = store.insertDreamRun(run, null, 'none');
+  store.upsertDreamNight('2026-09-05', 0, id, 'ok');
+
+  const phases = store.getDreamNight('2026-09-05')!.phases;
+  const failed = phases.find((p) => p.phase === 'patterns');
+  assert.equal(failed?.mark, 'failed');
+  assert.match(failed!.text, /ended 'dead'/);
+  assert.equal(failed?.failureCount, 0, 'a phase abort is not an item failure');
+  assert.equal(failed?.failuresJson, null);
+  assert.equal(JSON.parse(failed!.errorsJson!)[0].code, 'InternalError/PATTERNS_CHILD_DEAD');
+
+  // A phase that simply ran carries no errors column.
+  assert.equal(phases.find((p) => p.phase === 'consolidate')?.errorsJson, null);
+  cleanup();
+});
+
+test('a failed phase inside the global pass keeps its global scope', () => {
+  const { store, cleanup } = tmpStore();
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    '[dream-nightly] cycling sources: default',
+    'Dream cycle (partial) in 1.4s:',
+    '  ✓ lint  0 fix(es) applied',
+    '[dream-nightly] stamped last_full_cycle_at for default',
+    '[dream-nightly] global pass (brain-wide phases, once)',
+    'Dream cycle (partial) in 9424.8s:',
+    '  ✗ calibration_profile  calibration_profile failed: Not found',
+    '      [InternalError/CALIBRATION_PROFILE_UNKNOWN] Not found',
+    '[dream-nightly] global pass ok',
+  ].join('\n');
+  const [run] = parseDreamLog(text).runs;
+  attributeRun(run);
+  const id = store.insertDreamRun(run, null, 'none');
+  store.upsertDreamNight('2026-09-05', 0, id, 'ok');
+
+  const calib = store
+    .getDreamNight('2026-09-05')!
+    .phases.find((p) => p.phase === 'calibration_profile');
+  assert.equal(calib?.mark, 'failed');
+  assert.equal(calib?.scope, 'global');
+  assert.equal(calib?.sourceId, null);
+  assert.equal(calib?.attribution, 'stamped');
+  cleanup();
+});
+
+test('ingest offset round-trips and defaults to zero', () => {
+  const { store, cleanup } = tmpStore();
+  assert.equal(store.dreamIngestOffset(), 0);
+  store.setDreamIngestOffset(4096);
+  assert.equal(store.dreamIngestOffset(), 4096);
+  cleanup();
+});
+
+test('phase names are stored as values, not interpolated', () => {
+  const { store, cleanup } = tmpStore();
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    '[dream-nightly] cycling sources: default',
+    'Dream cycle (partial) in 1.0s:',
+    "  ✓ lint  0 fix(es); '); DROP TABLE dream_run; --",
+    '[dream-nightly] stamped last_full_cycle_at for default',
+  ].join('\n');
+  const [run] = parseDreamLog(text).runs;
+  attributeRun(run);
+  const id = store.insertDreamRun(run, null, 'none');
+  store.upsertDreamNight('2026-09-05', 0, id, 'ok');
+  assert.equal(store.queryDreamNights(10).length, 1, 'dream_run must still exist');
+  cleanup();
 });

@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230b0e14'/%3E%3Cpath d='M55 10 28 56h18l-5 34 31-48H52z' fill='%233b82f6'/%3E%3C/svg%3E">
+<title>MTPLX — dream health</title>
+<style>
+/* ---------------------------------------------------------------- tokens (shared with dashboard/history) */
+:root {
+  --page:        #f9f9f7;
+  --surface:     #fcfcfb;
+  --ink:         #0b0b0b;
+  --ink-2:       #52514e;
+  --muted:       #898781;
+  --grid:        #e1e0d9;
+  --baseline:    #c3c2b7;
+  --border:      rgba(11,11,11,0.10);
+
+  --s1: #2a78d6;
+  --s2: #1baf7a;
+  --s3: #eda100;
+  --s4: #008300;
+
+  --good:        #0ca30c;
+  --good-text:   #006300;
+  --warning:     #fab219;
+  --critical:    #d03b3b;
+
+  --shadow: 0 1px 2px rgba(11,11,11,0.04), 0 4px 14px rgba(11,11,11,0.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page:        #0d0d0d;
+    --surface:     #1a1a19;
+    --ink:         #ffffff;
+    --ink-2:       #c3c2b7;
+    --muted:       #898781;
+    --grid:        #2c2c2a;
+    --baseline:    #383835;
+    --border:      rgba(255,255,255,0.10);
+
+    --s1: #3987e5;
+    --s2: #199e70;
+    --s3: #c98500;
+    --s4: #008300;
+
+    --good:        #0ca30c;
+    --good-text:   #0ca30c;
+
+    --shadow: 0 1px 2px rgba(0,0,0,0.30), 0 4px 14px rgba(0,0,0,0.25);
+  }
+}
+
+/* ---------------------------------------------------------------- base */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--page);
+  color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1360px; margin: 0 auto; padding: 20px 24px 48px; }
+
+/* ---------------------------------------------------------------- header */
+header {
+  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  padding: 6px 2px 16px;
+}
+.brand { font-size: 19px; font-weight: 700; letter-spacing: 0.04em; }
+.brand small { font-weight: 400; color: var(--ink-2); letter-spacing: 0; margin-left: 10px; font-size: 13px; }
+.nav { display: flex; gap: 4px; margin-left: 2px; }
+.nav a {
+  font-size: 12.5px; color: var(--ink-2); text-decoration: none;
+  padding: 4px 11px; border-radius: 7px; border: 1px solid transparent;
+}
+.nav a:hover { color: var(--ink); background: rgba(11,11,11,0.035); }
+.nav a.active { color: var(--ink); border-color: var(--border); background: var(--surface); font-weight: 600; }
+@media (prefers-color-scheme: dark) { .nav a:hover { background: rgba(255,255,255,0.05); } }
+
+/* ---------------------------------------------------------------- grid & cards */
+main { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+.card {
+  grid-column: span 12;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 16px 18px 18px;
+  min-width: 0;
+}
+h2 {
+  font-size: 11.5px; font-weight: 600; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 2px;
+}
+.subtitle { font-size: 12px; color: var(--ink-2); margin-bottom: 12px; }
+
+/* ---------------------------------------------------------------- dream-specific */
+.banner {
+  padding: 8px 12px; border: 1px solid var(--warning); border-radius: 8px;
+  background: rgba(250,178,25,0.12); font-size: 12.5px; margin-bottom: 8px;
+}
+.banner:last-child { margin-bottom: 0; }
+.banner.err { border-color: var(--critical); background: rgba(208,59,59,0.10); }
+
+.nights { display: flex; gap: 6px; flex-wrap: wrap; }
+.night {
+  width: 62px; padding: 7px 3px; text-align: center; font-size: 10.5px;
+  border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
+  background: var(--page); color: var(--ink-2);
+}
+.night:hover { border-color: var(--baseline); }
+.night b { display: block; font-size: 11.5px; color: var(--ink); margin-bottom: 2px; }
+.night.sel { outline: 2px solid var(--s1); outline-offset: 1px; }
+
+.st-ok         { background: rgba(28,175,122,0.14);  border-color: rgba(28,175,122,0.55); }
+.st-warned     { background: rgba(250,178,25,0.16);  border-color: rgba(250,178,25,0.60); }
+.st-truncated  { background: rgba(208,59,59,0.14);   border-color: rgba(208,59,59,0.55); }
+.st-missed     { background: var(--page); border-style: dashed; border-color: var(--baseline); opacity: 0.75; }
+.st-unknown    { background: var(--page); }
+
+.detail-empty { font-size: 12.5px; color: var(--muted); }
+
+.srow { padding: 6px 0; border-bottom: 1px solid var(--grid); font-size: 12.5px; }
+.srow:last-child { border-bottom: none; }
+.srow b { color: var(--ink); }
+.attr { font-size: 10.5px; color: var(--muted); letter-spacing: 0.02em; }
+.mark-ran     { color: var(--s2); font-weight: 600; }
+.mark-noop    { color: var(--s3); font-weight: 600; }
+.mark-skipped { opacity: 0.5; }
+/* A phase that failed outright. Red and heavier than mark-noop's amber `!`,
+   which means the opposite thing — ran fine, had nothing to apply. */
+.mark-failed  { color: var(--critical); font-weight: 800; }
+.fail { color: var(--critical); font-size: 11.5px; margin: 2px 0 2px 18px; }
+/* The phase's own abort, and the [Class/CODE] line under it. Indented less
+   than .fail so a whole-phase failure does not read as one item's failure. */
+.pfail { color: var(--critical); font-size: 12px; font-weight: 600; margin: 4px 0 0 4px; }
+.perr  { color: var(--ink-2); font-size: 11.5px; margin: 1px 0 2px 18px; }
+.perr code { font: 11px ui-monospace, Menlo, monospace; color: var(--critical); }
+
+.run-meta { font-size: 12.5px; color: var(--ink-2); margin: 4px 0 12px; }
+.run-meta code { font: 11.5px ui-monospace, Menlo, monospace; }
+.run-meta .muted { color: var(--muted); }
+.run-meta b.callout { color: var(--critical); }
+
+footer { margin-top: 22px; font-size: 11.5px; color: var(--muted); text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">MTPLX<small>inference metrics</small></div>
+    <nav class="nav">
+      <a href="index.html">Dashboard</a>
+      <a href="log.html">Live log</a>
+      <a href="history.html">History</a>
+      <a href="dream.html" class="active">Dream</a>
+    </nav>
+  </header>
+
+  <main>
+
+    <section class="card">
+      <h2>Dream health</h2>
+      <div class="subtitle">Nightly-dream run history, newest night last. A dashed cell is a night that never fired.</div>
+      <div id="status"></div>
+      <div class="nights" id="strip"></div>
+    </section>
+
+    <section class="card" id="detail"></section>
+
+  </main>
+
+  <footer>parsed from gbrain's nightly-dream log · schedule derived from the LaunchAgent plist · no live updates on this page</footer>
+</div>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => (s == null ? '' : String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])));
+const fmt = (ms) => (ms ? new Date(ms).toLocaleString() : '—');
+/* Log-derived JSON. A malformed column must cost that one detail line, not the
+   whole page — nothing here is worth taking the view down for. */
+const arr = (json) => {
+  try { const v = JSON.parse(json || '[]'); return Array.isArray(v) ? v : []; }
+  catch { return []; }
+};
+/* `failed` is the phase's own verdict; `noop` (`!`) is the opposite — it ran
+   and had nothing to apply. A mark this build does not know renders `?` rather
+   than borrowing another mark's glyph and asserting something untrue. */
+const SYMBOL = { ran: '✓', failed: '✗', noop: '!', skipped: '−' };
+
+async function load() {
+  let payload;
+  try {
+    payload = await (await fetch('/api/dream/nights?limit=14')).json();
+  } catch (e) {
+    $('status').innerHTML = '<div class="banner err">Could not reach the server: ' + esc(e.message) + '</div>';
+    return;
+  }
+
+  const warnings = [];
+  if (!payload.status.ok) warnings.push({ text: 'Log unreadable: ' + esc(payload.status.error), err: true });
+  // Absence of a schedule disables missed-night detection; say so rather than
+  // letting the strip imply every night ran.
+  if (!payload.status.scheduleKnown) warnings.push({ text: 'Schedule unknown — missed nights are NOT detected.' });
+  if (payload.status.unrecognisedCount > 0)
+    warnings.push({ text: payload.status.unrecognisedCount + ' unrecognised log line(s) — the parser may be out of date.' });
+  $('status').innerHTML = warnings
+    .map((w) => '<div class="banner' + (w.err ? ' err' : '') + '">' + w.text + '</div>')
+    .join('');
+
+  const strip = $('strip');
+  strip.innerHTML = '';
+  for (const n of [...payload.nights].reverse()) {
+    const el = document.createElement('div');
+    el.className = 'night st-' + n.status;
+    el.innerHTML = '<b>' + esc(n.date.slice(5)) + '</b>' + esc(n.status);
+    el.onclick = () => { select(el); detail(n.date); };
+    strip.appendChild(el);
+  }
+  const last = strip.lastElementChild;
+  if (last) { select(last); detail(payload.nights[0].date); }
+  else $('detail').innerHTML = '<p class="detail-empty">No nights in range.</p>';
+}
+
+function select(el) {
+  for (const n of document.querySelectorAll('.night')) n.classList.remove('sel');
+  el.classList.add('sel');
+}
+
+async function detail(date) {
+  const res = await fetch('/api/dream/nights/' + date);
+  /* 503 means the log could not be read at all; 404 means it was read and this
+     night genuinely has no run. Collapsing them here would undo, at the UI
+     layer, the same distinction the API was fixed to preserve. */
+  if (res.status === 503) {
+    const body = await res.json().catch(() => ({}));
+    $('detail').innerHTML =
+      '<div class="banner err">Could not read the dream log: ' +
+      esc(body.error || 'unknown error') + '</div>';
+    return;
+  }
+  if (!res.ok) { $('detail').innerHTML = '<p class="detail-empty">No run for ' + esc(date) + '.</p>'; return; }
+  const d = await res.json();
+  if (!d.run) { $('detail').innerHTML = '<p class="detail-empty">' + esc(date) + ': never fired.</p>'; return; }
+
+  const r = d.run;
+  let head = '<h2>' + esc(date) + '</h2><div class="run-meta">' + fmt(r.startedAt) + ' → ' + fmt(r.endedAt) +
+             ' · <b>' + esc(r.termination) + '</b>';
+  if (r.globalPassRc !== null) head += ' · global pass rc=' + esc(String(r.globalPassRc));
+  head += '</div>';
+
+  /* A run can exit 0 with a phase dead inside it — that is the whole point of
+     this callout. Without it such a night reads as clean, which is the view's
+     governing rule inverted. Derived from the phases already on screen; it
+     invents no status and changes no stored one. */
+  const failed = d.phases.filter((p) => p.mark === 'failed');
+  if (failed.length)
+    head += '<div class="run-meta"><b class="callout">' + failed.length +
+            ' phase(s) failed outright: ' + esc(failed.map((p) => p.phase).join(', ')) +
+            '</b></div>';
+
+  /* The parsed reading and the git cross-check can disagree — a run can commit
+     without ever printing `done`. Show the disagreement; do not resolve it. */
+  head += '<div class="run-meta">';
+  if (r.commitSource === 'unavailable')
+    head += '<span class="muted">Commit status could not be checked.</span>';
+  else if (r.commitSource === 'none')
+    head += '<span class="muted">No commit for this night.</span>';
+  else if (r.committedSha)
+    head += 'Committed <code>' + esc(r.committedSha) + '</code> <span class="muted">(' + esc(r.commitSource) + ')</span>';
+  else
+    // A commit is recorded but no sha came with it. Say exactly that rather
+    // than rendering an empty <code> and calling it a sha.
+    head += 'Commit recorded <span class="muted">(' + esc(r.commitSource) + ') — no sha captured</span>';
+  if (r.termination !== 'completed' && r.committedSha)
+    head += ' <b class="callout">— banked work despite not finishing.</b>';
+  head += '</div>';
+
+  /* Three kinds of row, in this order: one per source, then the brain-wide
+     global pass, then whatever could not be placed. The global pass is the
+     largest single block in a normal night and belongs to no source — folding
+     it into "(unattributed)" would drown the bucket that carries real doubt. */
+  const groups = new Map();
+  const groupFor = (key, label, rank) => {
+    if (!groups.has(key)) groups.set(key, { label, rank, phases: [], attributions: new Set() });
+    return groups.get(key);
+  };
+  for (const p of d.phases) {
+    const g = p.scope === 'global'
+      ? groupFor('\u0000global', 'global pass', 1)
+      : p.sourceId
+        ? groupFor('s:' + p.sourceId, p.sourceId, 0)
+        : groupFor('\u0000none', '(unattributed)', 2);
+    g.phases.push(p);
+    if (p.scope !== 'global' && p.sourceId && p.attribution) g.attributions.add(p.attribution);
+  }
+
+  let body = '';
+  for (const g of [...groups.values()].sort((a, b) => a.rank - b.rank)) {
+    body += '<div class="srow"><b>' + esc(g.label) + '</b>';
+    /* How we reached the attribution, not just what it says. Section 2.2's
+       whole warning is that the inferred ones are the fallible ones. */
+    if (g.attributions.size)
+      body += ' <span class="attr">' + esc([...g.attributions].join(', ')) + '</span>';
+    body += '&nbsp; ';
+    body += g.phases.map((p) =>
+      '<span class="mark-' + esc(p.mark) + '" title="' + esc(p.phase) + ': ' + esc(p.text) + '">' +
+      esc(SYMBOL[p.mark] || '?') + '</span>').join(' ');
+    body += '</div>';
+    for (const p of g.phases) {
+      /* The phase's own abort first, then its classification, then any items
+         that failed inside it. Three different claims, three different rows. */
+      if (p.mark === 'failed')
+        body += '<div class="pfail">✗ ' + esc(p.phase) + ' — ' + esc(p.text) + '</div>';
+      for (const e of arr(p.errorsJson))
+        body += '<div class="perr"><code>' + esc(e.code) + '</code> ' + esc(e.detail) + '</div>';
+      for (const f of arr(p.failuresJson))
+        body += '<div class="fail">✗ ' + esc(f.slug) + ': ' + esc(f.message) + '</div>';
+    }
+  }
+
+  $('detail').innerHTML = head + body;
+}
+
+load();
+</script>
+</body>
+</html>

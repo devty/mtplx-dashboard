@@ -134,7 +134,10 @@ const NOISE = [
   /^Brain is healthy\./,
   /^No stale pages/,
   /^ {2}totals: /,
-  /^\[dream-nightly:(patch|export|mtplx|parity|commit|orphans)\]/,
+  /* Sub-tagged dream-nightly loggers. One entry per tag rather than a
+     `[dream-nightly:...]` catch-all, so a NEW tag — a new subsystem talking
+     for the first time — reaches the drift canary instead of being absorbed. */
+  /^\[dream-nightly:(patch|export|mtplx|parity|commit|orphans|worker|fullsync)\]/,
   /* `global pass brain dir: …` and `global pass ok`. The `(brain-wide phases,
      once)` marker is NOT noise and is consumed above. `cycling sources` and
      `stamped` are deliberately absent: they have their own regexes, so a
@@ -147,8 +150,35 @@ const NOISE = [
   /^Text imported\. Run /,
   // Backlink-candidate pruning notice ("N candidate(s) ...").
   /^Skipped \d+ candidate\(s\) whose target page doesn't exist/,
+  /* Backlink candidates dropped because the target is in a different source.
+     Two wordings, both from the cross-source rule; each is spelled out rather
+     than reduced to a shared `^Skipped \d+` stem, which would also swallow
+     wordings nobody has read. */
+  /^Skipped \d+ candidate\(s\) whose target page exists only in another source/,
+  /^Skipped \d+ cross-source candidate\(s\) — target exists only in another source/,
   // Lock contention: another cycle already held the per-source lock.
   /^Skipped: another cycle is already running\./,
+  /* A `gbrain import` running under the dream prints its own progress block.
+     None of it is per-phase: the phase line that owns the import reports the
+     outcome separately, so these are duplicate detail, not lost signal. */
+  /^Running full import of \S.*\(\d+ workers\)\.\.\.$/,
+  /^Found \d+ markdown files$/,
+  /^Using \d+ parallel workers$/,
+  /^Large sync \(\d+ files\)\. Importing text, deferring embeddings\.$/,
+  /^Import complete \([\d.]+s\):$/,
+  /^ {2}\d+ pages imported$/,
+  /^ {2}\d+ pages skipped \(\d+ unchanged, \d+ errors\)$/,
+  /^ {2}\d+ chunks created$/,
+  /^ {2}Deleted un-syncable page: \S+$/,
+  // Sync-planner gates: why this pass chose a full re-chunk / tree diff.
+  /^\[sync\] chunker_version gate: stored=\d+, current=\d+\./,
+  /^\[sync\] last_commit \S+ not an ancestor of HEAD\b/,
+  /* Operator annotations around hand-run invocations. They mark a manual run,
+     they are not one: the run itself still opens on its own `starting` line, so
+     skipping these loses nothing the run record does not already hold. */
+  /^=== marker: .* ===$/,
+  /^={5,} RUN START .* ={5,}$/,
+  /^\[dream-nightly\] === MANUAL RUN .* ===$/,
   /^ *$/,
 ];
 

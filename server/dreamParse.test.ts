@@ -119,6 +119,7 @@ test('parses the whole real log with zero unrecognised lines', () => {
     'truncated-run.txt',
     'attribution-trap.txt',
     'missed-gap.txt',
+    'failed-phase-run.txt',
   ]) {
     assert.equal(parseDreamLog(fixture(f)).unrecognisedCount, 0, `${f} has unparsed lines`);
   }
@@ -257,4 +258,45 @@ test('the real failed-phase run parses its ✗ phase and error detail', () => {
   const nested = r.runs[0].cycles.flatMap((c) => c.phases).filter((p) => p.failures.length);
   assert.ok(nested.length >= 1, 'and they are still item failures, not phases');
   assert.ok(nested.every((p) => p.mark !== 'failed'));
+});
+
+test('the import-progress block and operator markers are known noise', () => {
+  /* These were ~200 of the real log's 209 unrecognised lines — a constant
+     background that made the drift canary useless as a drift signal. Each is
+     matched by the shape it names, not by a prefix stem. */
+  const text = [
+    '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+    'Running full import of /Users/example/mybrain (8 workers)...',
+    'Found 2177 markdown files',
+    'Using 8 parallel workers',
+    'Large sync (670 files). Importing text, deferring embeddings.',
+    'Import complete (18.5s):',
+    '  1095 pages imported',
+    '  1095 pages skipped (1095 unchanged, 0 errors)',
+    '  4210 chunks created',
+    '  Deleted un-syncable page: package-json',
+    '[sync] chunker_version gate: stored=4, current=5. Forcing full re-chunk pass.',
+    '[sync] last_commit e1cbe4bd not an ancestor of HEAD (history rewritten)',
+    '[dream-nightly:fullsync] default: 12 file(s) imported',
+    '[dream-nightly:worker] worker exited rc=1 — respawning in 5s',
+    'Skipped 29 candidate(s) whose target page exists only in another source.',
+    'Skipped 12 cross-source candidate(s) — target exists only in another source.',
+    '=== marker: manual post-merge run ===',
+    '===== RUN START 2026-08-19 10:32:17 | mtplx 2.8.3 | patterns oneshot =====',
+    '[dream-nightly] === MANUAL RUN started Mon Aug 24 12:39:57 EDT 2026 (catch-up) ===',
+  ].join('\n');
+  assert.equal(parseDreamLog(text).unrecognisedCount, 0);
+});
+
+test('a drifted import line is still drift, not swallowed by a stem', () => {
+  const r = parseDreamLog(
+    [
+      '[dream-nightly] Sat Sep  5 07:05:06 EDT 2026 starting',
+      'Import complete but something went wrong',
+      '  Deleted un-syncable page:',
+      '[sync] some new gate nobody has read',
+      '[dream-nightly:brandnewtag] a subsystem talking for the first time',
+    ].join('\n')
+  );
+  assert.equal(r.unrecognisedCount, 4);
 });

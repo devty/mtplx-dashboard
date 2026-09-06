@@ -393,7 +393,7 @@ git commit -m "feat: pure request/response capture extraction"
 - Produces:
   - `interface EngineSample { ttftS: number | null; decodeTokS: number | null }`
   - `class EngineJoin` with:
-    - `constructor(opts?: { maxTicks?: number; maxWaiters?: number })`
+    - `constructor(opts?: { maxTicks?: number; maxWaiters?: number; claimTimeoutMs?: number })`
     - `claim(): Promise<EngineSample | null>`
     - `settle(completedDelta: number | null, sample: EngineSample): void`
     - `abandon(): void`
@@ -413,6 +413,8 @@ Two failure modes the design must survive:
 2. **A completion the proxy never saw** — someone curls the upstream directly, bypassing the proxy. Then `completedDelta` exceeds the waiter count. Resolve every waiter it covers to `null` and discard the remainder; guessing which of our requests the engine meant would be worse than admitting we do not know.
 
 Claims must never reject and never leak: `maxWaiters` (default 64) bounds the queue, and the oldest is resolved `null` when it overflows.
+
+**And a third failure mode, which the tick bound alone does not cover** (controller ruling R1): `settle()` runs only on a *successful* scrape — deliberately, so a `/metrics` outage does not age waiters out for something that is not their fault. But that means during an outage nothing settles at all, so `ticks` never advances, no waiter ever resolves, and the proxy's `persist()` never runs. Requests would keep being served perfectly and silently vanish from the log — exactly when the log matters most. Each waiter therefore also arms a **wall-clock** fallback, `claimTimeoutMs` (default 15000 ms, comfortably above `pollIntervalMs × maxTicks`), which resolves `null`. The timer is cleared on normal resolution and `unref()`'d so a pending claim can never hold the process open at shutdown.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -508,6 +510,28 @@ test('abandon resolves everything to null', async () => {
   assert.equal(j.pending(), 0);
 });
 
+/* settle() runs only on a SUCCESSFUL scrape, so during a /metrics outage
+   nothing settles and the tick bound never advances. Without a wall-clock
+   fallback the proxy's persist() would never run and the request would vanish
+   from the log — exactly when the log matters most. */
+test('a claim resolves null on its own when the scraper never settles', async () => {
+  const j = new EngineJoin({ claimTimeoutMs: 30 });
+  const p = j.claim();
+  assert.equal(await p, null);
+  assert.equal(j.pending(), 0);
+});
+
+test('the wall-clock timer is cleared when a claim settles normally', async () => {
+  const j = new EngineJoin({ claimTimeoutMs: 30 });
+  const p = j.claim();
+  j.settle(1, S(0.2, 40));
+  assert.deepEqual(await p, { ttftS: 0.2, decodeTokS: 40 });
+  /* Nothing pending, and no stray timer may fire later against a resolved
+     promise or hold the event loop open. */
+  await new Promise(r => setTimeout(r, 50));
+  assert.equal(j.pending(), 0);
+});
+
 test('claims never reject', async () => {
   const j = new EngineJoin();
   const p = j.claim();
@@ -536,6 +560,8 @@ export interface EngineSample {
 interface Waiter {
   resolve: (s: EngineSample | null) => void;
   ticks: number;
+  /** Wall-clock escape hatch — see the claimTimeoutMs note below. */
+  timer: NodeJS.Timeout;
 }
 
 /** Joins a proxied request to the engine's own measurement of it.
@@ -553,10 +579,18 @@ export class EngineJoin {
   private waiters: Waiter[] = [];
   private readonly maxTicks: number;
   private readonly maxWaiters: number;
+  private readonly claimTimeoutMs: number;
 
-  constructor(opts: { maxTicks?: number; maxWaiters?: number } = {}) {
+  constructor(opts: { maxTicks?: number; maxWaiters?: number; claimTimeoutMs?: number } = {}) {
     this.maxTicks = opts.maxTicks ?? 3;
     this.maxWaiters = opts.maxWaiters ?? 64;
+    this.claimTimeoutMs = opts.claimTimeoutMs ?? 15_000;
+  }
+
+  /** Single exit for every waiter, so the wall-clock timer is always cleared. */
+  private finish(w: Waiter, s: EngineSample | null): void {
+    clearTimeout(w.timer);
+    w.resolve(s);
   }
 
   /** Never rejects. Resolves with the engine's sample, or null when no
@@ -565,8 +599,24 @@ export class EngineJoin {
     return new Promise(resolve => {
       /* Bound the queue: a scraper that stops settling (upstream down, dashboard
          mid-restart) must not accumulate waiters for every request served. */
-      if (this.waiters.length >= this.maxWaiters) this.waiters.shift()?.resolve(null);
-      this.waiters.push({ resolve, ticks: 0 });
+      const oldest = this.waiters.shift.length >= 0 && this.waiters.length >= this.maxWaiters
+        ? this.waiters.shift()
+        : undefined;
+      if (oldest) this.finish(oldest, null);
+
+      const w: Waiter = { resolve, ticks: 0, timer: undefined as unknown as NodeJS.Timeout };
+      /* The tick bound only advances when the scraper settles, and it settles
+         only on a SUCCESSFUL scrape. During a /metrics outage nothing settles
+         at all, so without this the request row would never be written. */
+      w.timer = setTimeout(() => {
+        const i = this.waiters.indexOf(w);
+        if (i >= 0) {
+          this.waiters.splice(i, 1);
+          this.finish(w, null);
+        }
+      }, this.claimTimeoutMs);
+      w.timer.unref?.();
+      this.waiters.push(w);
     });
   }
 
@@ -575,13 +625,13 @@ export class EngineJoin {
     const n = completedDelta ?? 0;
 
     if (n === 1 && this.waiters.length > 0) {
-      this.waiters.shift()!.resolve(sample);
+      this.finish(this.waiters.shift()!, sample);
     } else if (n > 1) {
       /* A mean across several requests — nobody gets it. If the delta exceeds
          the queue (a client bypassing the proxy) the surplus is simply
          discarded; there is no waiter it could belong to. */
       for (let i = 0; i < n && this.waiters.length > 0; i++) {
-        this.waiters.shift()!.resolve(null);
+        this.finish(this.waiters.shift()!, null);
       }
     }
 
@@ -590,7 +640,7 @@ export class EngineJoin {
        eventually give up or its request row is never written. */
     const survivors: Waiter[] = [];
     for (const w of this.waiters) {
-      if (++w.ticks >= this.maxTicks) w.resolve(null);
+      if (++w.ticks >= this.maxTicks) this.finish(w, null);
       else survivors.push(w);
     }
     this.waiters = survivors;
@@ -600,7 +650,7 @@ export class EngineJoin {
   abandon(): void {
     const pending = this.waiters;
     this.waiters = [];
-    for (const w of pending) w.resolve(null);
+    for (const w of pending) this.finish(w, null);
   }
 
   pending(): number {
@@ -612,7 +662,7 @@ export class EngineJoin {
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `node --disable-warning=ExperimentalWarning --import tsx --test server/engineJoin.test.ts`
-Expected: PASS, 9 tests.
+Expected: PASS, 11 tests.
 
 - [ ] **Step 5: Typecheck and commit**
 
@@ -880,7 +930,7 @@ function toSummary(r: RawRequestRow): RequestSummary {
 Run: `node --disable-warning=ExperimentalWarning --import tsx --test server/db.test.ts`
 Expected: PASS — 51 existing plus 9 new.
 
-Then `npm test` — expected 141/141 (108 existing + 15 from Task 1 + 9 from Task 2 + these 9).
+Then `npm test` — expected 143/143 (108 existing + 15 from Task 1 + 11 from Task 2 + these 9).
 
 - [ ] **Step 5: Commit**
 
@@ -1452,7 +1502,7 @@ export function listening(): boolean {
 Run: `node --disable-warning=ExperimentalWarning --import tsx --test server/proxy.test.ts`
 Expected: PASS, 10 tests. The slow-upstream test takes ~3.2 s by design — that is the assertion.
 
-Then `npm test` — expected 151/151 (141 + these 10).
+Then `npm test` — expected 153/153 (143 + these 10).
 
 - [ ] **Step 6: Commit**
 
@@ -1575,7 +1625,7 @@ Change the signature to `export function start(t: Target, s: Store, j: EngineJoi
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `node --disable-warning=ExperimentalWarning --import tsx --test server/promScraper.test.ts`
-Expected: PASS, 9 tests (7 existing + 2 new). `npm test` — expected 153/153.
+Expected: PASS, 9 tests (7 existing + 2 new). `npm test` — expected 155/155.
 
 Note `npm run typecheck` will now fail in `server/server.ts` (it calls `scraper.start` with two arguments). That is expected and is fixed in Task 6. Do not modify `server.ts` here.
 
@@ -1685,7 +1735,7 @@ Update the boot log to name the proxy port when capture is enabled.
 
 ```bash
 npm run typecheck    # expected clean
-npm test             # expected 153/153
+npm test             # expected 155/155
 npm run build        # expected clean
 ```
 
@@ -1965,7 +2015,7 @@ git commit -m "docs: describe the capture proxy architecture"
 
 ## Done when
 
-- `npm test` passes: `capture` (15), `engineJoin` (9), `proxy` (10), plus the existing 108 and the 9 new `db` tests and 2 new scraper tests — 153 total.
+- `npm test` passes: `capture` (15), `engineJoin` (11), `proxy` (10), plus the existing 108 and the 9 new `db` tests and 2 new scraper tests — 155 total.
 - `npm run typecheck` and `npm run build` are clean.
 - A completion sent to `:8010` returns normally and produces a `request` row with real token counts, plus a `transcript` row.
 - A single-request interval yields `engine_joined = 1` with a non-null `ttft_s`; a burst yields `engine_joined = 0` with nulls.
